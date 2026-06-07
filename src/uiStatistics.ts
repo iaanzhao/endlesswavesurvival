@@ -33,12 +33,17 @@ function drawStatRow(
 
   const iconFrame = new Graphics();
   const icon = new Graphics();
+  const iconClip = new Graphics();
   const iconCx = 28;
   const iconCy = (ROW_H - 4) / 2;
   const accent = statIconAccent(entry.iconId);
   drawUpgradeIconFrame(iconFrame, iconCx, iconCy, ICON_BOX, accent, focused);
   drawUpgradeIcon(icon, entry.iconId, iconCx, iconCy);
-  row.addChild(iconFrame, icon);
+  iconClip
+    .rect(iconCx - ICON_BOX / 2 + 3, iconCy - ICON_BOX / 2 + 3, ICON_BOX - 6, ICON_BOX - 6)
+    .fill(0xffffff);
+  icon.mask = iconClip;
+  row.addChild(iconClip, iconFrame, icon);
 
   const badge =
     entry.category === "class" && entry.hero && entry.slot

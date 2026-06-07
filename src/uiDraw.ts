@@ -372,8 +372,9 @@ export function drawUpgradeIcon(
     case "class_knight_r":
       for (let i = 0; i < 4; i++) {
         const a = (i / 4) * Math.PI * 2 + 0.4;
-        g.arc(cx, cy, 12, a - 0.35, a + 0.35).stroke({ width: 3, color: 0xddddff, alpha: 0.85 });
+        g.arc(cx, cy, 8, a - 0.3, a + 0.3).stroke({ width: 2, color: 0xddddff, alpha: 0.85 });
       }
+      g.circle(cx, cy, 2).fill({ color: 0xffffff, alpha: 0.45 });
       break;
     case "class_rogue_q":
       for (let i = 0; i < 4; i++) {
