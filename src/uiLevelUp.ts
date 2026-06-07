@@ -1,5 +1,6 @@
 import { Container, Graphics, Text } from "pixi.js";
 import { UPGRADES, type UpgradeId } from "./data";
+import { getSkillUpgradeDesc, isSkillUpgrade } from "./bonusSkills";
 import {
   drawLevelUpHeaderFx,
   drawUpgradeCardBg,
@@ -198,24 +199,36 @@ export function createLevelUpPanel(opts: {
         color: lvl === 0 ? UI.cardSelectedGlow : accent,
         alpha: 0.85,
       });
-    card.badgeText.text = lvl === 0 ? "✦ NEW" : `Lv ${lvl} → ${lvl + 1}`;
-    card.badgeText.style.fill = lvl === 0 ? UI.textPrimary : UI.textGreen;
-    card.badgeText.position.set(iconCx, badgeY + badgeH / 2);
+        card.badgeText.text =
+          lvl === 0
+            ? isSkillUpgrade(id)
+              ? "✦ SKILL"
+              : "✦ NEW"
+            : `Lv ${lvl} → ${lvl + 1}`;
+        card.badgeText.style.fill = lvl === 0 ? UI.textPrimary : UI.textGreen;
+        card.badgeText.position.set(iconCx, badgeY + badgeH / 2);
 
-    card.title.text = up.name.toUpperCase();
-    card.title.style.fill = selected ? UI.textPrimary : UI.textPrimary;
-    card.title.position.set(iconCx, 118);
-    card.desc.text = up.desc;
-    card.desc.position.set(iconCx, 148);
+        card.title.text = up.name.toUpperCase();
+        card.title.style.fill = selected ? UI.textPrimary : UI.textPrimary;
+        card.title.position.set(iconCx, 118);
+        card.desc.text = isSkillUpgrade(id)
+          ? getSkillUpgradeDesc(id, lvl)
+          : up.desc;
+        card.desc.position.set(iconCx, 148);
 
-    drawUpgradeLevelPips(card.pips, iconCx, CARD_H - 52, lvl, up.maxLevel, accent);
+        drawUpgradeLevelPips(card.pips, iconCx, CARD_H - 52, lvl, up.maxLevel, accent);
 
-    const nextLabel =
-      lvl === 0
-        ? "First time — big boost!"
-        : lvl + 1 >= up.maxLevel
-          ? "→ MAX LEVEL next"
-          : `Stack ${lvl + 1} — keeps scaling`;
+        const nextLabel = isSkillUpgrade(id)
+          ? lvl === 0
+            ? "Unlocks a new auto skill"
+            : lvl + 1 >= up.maxLevel
+              ? "→ MAX LEVEL next"
+              : "Skill grows stronger"
+          : lvl === 0
+            ? "First time — big boost!"
+            : lvl + 1 >= up.maxLevel
+              ? "→ MAX LEVEL next"
+              : `Stack ${lvl + 1} — keeps scaling`;
     card.levelText.text = nextLabel;
     card.levelText.style.fill = lvl + 1 >= up.maxLevel ? UI.coin : UI.textDim;
     card.levelText.position.set(iconCx, CARD_H - 32);

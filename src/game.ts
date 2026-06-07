@@ -17,17 +17,34 @@ import {
   spawnIntervalForWave,
   waveEnemyHpBonus,
   type AppliedStats,
+  type AttackKind,
   type CharacterDef,
   type CharacterId,
   type EnemyKind,
   type UpgradeId,
 } from "./data";
 import { Input, dist, formatTime, loadSave, pickRandom, saveGame, setClickHitArea } from "./util";
-import { createGameHud } from "./uiHud";
+import { createGameHud, type HudSkillSlot } from "./uiHud";
 import { createLevelUpPanel } from "./uiLevelUp";
 import { drawMenuButtonBg, drawPanelFrame } from "./uiDraw";
 import { bodyStyle, FONT, menuTitleStyle, titleStyle, UI } from "./uiTheme";
 import { createMenuBackdrop } from "./menuBackdrop";
+import {
+  drawMeleeSlash,
+  drawProjectileBody,
+  paintTransientFx,
+  spawnBoltFx,
+  spawnHitBurst,
+  spawnMuzzleFlash,
+  spawnRingFx,
+  type TransientFx,
+} from "./attackFx";
+import {
+  getOrbiterConfig,
+  OrbiterSystem,
+  SKILL_COOLDOWNS,
+  type SkillUpgradeId,
+} from "./bonusSkills";
 import {
   createEnemyGraphic,
   getEnemyHealthBarWidth,
@@ -66,6 +83,7 @@ interface Enemy {
   wobblePhase: number;
   spawnTimer: number;
   showHealthBar: boolean;
+  orbiterHitCooldown: number;
 }
 
 type FloatKind = "damage" | "crit" | "xp" | "gold" | "heal" | "hurt";
@@ -98,7 +116,12 @@ interface Projectile {
   radius: number;
   color: number;
   life: number;
+  maxLife: number;
   gfx: Graphics;
+  attackKind: AttackKind;
+  angle: number;
+  crit: boolean;
+  spin: number;
   isMelee?: boolean;
 }
 
@@ -115,6 +138,7 @@ const DASH_DURATION = 0.18;
 const DASH_COOLDOWN = 1.0;
 const DASH_SPEED = 420;
 const DASH_IFRAMES = 0.22;
+const ATTACK_SWING_DUR = 0.2;
 
 export async function startGame(app: Application) {
   await loadEnemyAssets();
@@ -161,6 +185,8 @@ export async function startGame(app: Application) {
   let skillQCooldown = 0;
   let skillRCooldown = 0;
   let smokeTimer = 0;
+  let attackSwingTimer = 0;
+  let attackSwingAngle = 0;
   let reviveLeft = 0;
   let upgradeLevels: Partial<Record<UpgradeId, number>> = {};
 
@@ -176,12 +202,18 @@ export async function startGame(app: Application) {
   const pickups: Pickup[] = [];
   const floatingNums: FloatingNum[] = [];
   const spawnRings: SpawnRingFx[] = [];
+  const transientFx: TransientFx[] = [];
   let pendingHurtNumber = 0;
   let hurtNumberTimer = 0;
   const enemyLayer = new Container();
   const fxLayer = new Container();
   const pickupLayer = new Container();
   world.addChild(floor, enemyLayer, pickupLayer, fxLayer, playerGfx);
+  const orbiterSystem = new OrbiterSystem(world);
+
+  const bonusSkillCooldowns: Partial<
+    Record<Exclude<SkillUpgradeId, "skill_orbit">, number>
+  > = {};
 
   const hud = createGameHud();
   ui.addChild(hud.root);
@@ -189,6 +221,134 @@ export async function startGame(app: Application) {
   ui.addChild(overlay);
 
   let levelUpPanel!: ReturnType<typeof createLevelUpPanel>;
+
+  function skillLv(id: UpgradeId): number {
+    return upgradeLevels[id] ?? 0;
+  }
+
+  function syncOrbiters() {
+    orbiterSystem.setConfig(
+      getOrbiterConfig(skillLv("skill_orbit"), stats.damageMult),
+    );
+  }
+
+  function buildHudSkills(): HudSkillSlot[] {
+    const skills: HudSkillSlot[] = [];
+    if (skillLv("skill_orbit") > 0) {
+      skills.push({ name: "Orbit", cd: 0, maxCd: 0, passive: true });
+    }
+    if (skillLv("skill_meteor") > 0) {
+      const max = SKILL_COOLDOWNS.skill_meteor * stats.cooldownMult;
+      skills.push({
+        name: "Meteor",
+        cd: bonusSkillCooldowns.skill_meteor ?? 0,
+        maxCd: max,
+      });
+    }
+    if (skillLv("skill_thunder") > 0) {
+      const max = SKILL_COOLDOWNS.skill_thunder * stats.cooldownMult;
+      skills.push({
+        name: "Thunder",
+        cd: bonusSkillCooldowns.skill_thunder ?? 0,
+        maxCd: max,
+      });
+    }
+    if (skillLv("skill_heal") > 0) {
+      const max = SKILL_COOLDOWNS.skill_heal * stats.cooldownMult;
+      skills.push({
+        name: "Heal",
+        cd: bonusSkillCooldowns.skill_heal ?? 0,
+        maxCd: max,
+      });
+    }
+    skills.push({
+      name: character.skillQ.name,
+      cd: skillQCooldown,
+      maxCd: character.skillQ.cooldown * stats.cooldownMult,
+    });
+    skills.push({
+      name: character.skillR.name,
+      cd: skillRCooldown,
+      maxCd: character.skillR.cooldown * stats.cooldownMult,
+    });
+    return skills;
+  }
+
+  function castMeteorShower() {
+    const level = skillLv("skill_meteor");
+    if (level <= 0) return;
+    const active = enemies.filter((e) => e.spawnTimer <= 0);
+    if (active.length === 0) return;
+
+    for (let i = 0; i < level; i++) {
+      const e = active[Math.floor(Math.random() * active.length)];
+      addTransientFx(spawnRingFx(e.x, e.y, 28, 0xff6622, 0.22));
+      damageEnemy(e, 32 * stats.damageMult);
+    }
+  }
+
+  function castThunderStrike() {
+    const level = skillLv("skill_thunder");
+    if (level <= 0) return;
+    const target = findNearestEnemy(420);
+    if (!target) return;
+
+    const dmg = (28 + level * 8) * stats.damageMult;
+    addTransientFx(spawnBoltFx(playerX, playerY, target.x, target.y, 0x66ccff));
+    damageEnemy(target, dmg);
+
+    if (level >= 2) {
+      let cx = target.x;
+      let cy = target.y;
+      const next = enemies
+        .filter((e) => e !== target && e.spawnTimer <= 0 && dist(cx, cy, e.x, e.y) < 140)
+        .sort((a, b) => dist(cx, cy, a.x, a.y) - dist(cx, cy, b.x, b.y))[0];
+      if (next) {
+        addTransientFx(spawnBoltFx(cx, cy, next.x, next.y, 0xaaddff));
+        damageEnemy(next, dmg * 0.65);
+      }
+    }
+  }
+
+  function castHealingAura() {
+    const level = skillLv("skill_heal");
+    if (level <= 0) return;
+    const heal = 8 + level * 4;
+    const actual = Math.min(heal, stats.maxHp - playerHp);
+    playerHp = Math.min(stats.maxHp, playerHp + heal);
+    if (actual > 0) {
+      spawnFloatingNumber(playerX, playerY - 28, actual, "heal");
+    }
+    addTransientFx(spawnRingFx(playerX, playerY, 55 + level * 8, 0x55dd77, 0.3));
+  }
+
+  function useBonusSkills() {
+    const casts: {
+      id: Exclude<SkillUpgradeId, "skill_orbit">;
+      fn: () => void;
+    }[] = [
+      { id: "skill_meteor", fn: castMeteorShower },
+      { id: "skill_thunder", fn: castThunderStrike },
+      { id: "skill_heal", fn: castHealingAura },
+    ];
+
+    for (const { id, fn } of casts) {
+      if (skillLv(id) <= 0) continue;
+      const cd = bonusSkillCooldowns[id] ?? 0;
+      if (cd > 0) continue;
+      fn();
+      bonusSkillCooldowns[id] = SKILL_COOLDOWNS[id] * stats.cooldownMult;
+    }
+  }
+
+  function tickBonusSkillCooldowns(dt: number) {
+    for (const id of ["skill_meteor", "skill_thunder", "skill_heal"] as const) {
+      if (skillLv(id) <= 0) continue;
+      if ((bonusSkillCooldowns[id] ?? 0) > 0) {
+        bonusSkillCooldowns[id] = Math.max(0, (bonusSkillCooldowns[id] ?? 0) - dt);
+      }
+    }
+  }
 
   function drawFloor() {
     floor.clear();
@@ -216,31 +376,65 @@ export async function startGame(app: Application) {
 
   function drawPlayerGraphic() {
     playerBody.clear();
+    const swingT =
+      attackSwingTimer > 0 ? 1 - attackSwingTimer / ATTACK_SWING_DUR : 0;
+    const recoil = Math.sin(swingT * Math.PI);
+    const lx = Math.cos(attackSwingAngle) * recoil * 9;
+    const ly = Math.sin(attackSwingAngle) * recoil * 9;
+    playerBody.position.set(lx, ly);
+    playerBody.scale.set(1 + recoil * 0.06, 1 - recoil * 0.03);
+
     const c = character.color;
     const a = character.accent;
+    const ax = Math.cos(attackSwingAngle);
+    const ay = Math.sin(attackSwingAngle);
+
     switch (character.id) {
       case "mage":
         playerBody.circle(0, -6, 10).fill(a);
         playerBody.roundRect(-8, -2, 16, 18, 3).fill(c);
         playerBody.moveTo(-14, 4).lineTo(-22, 16).stroke({ width: 3, color: 0x8844cc });
         playerBody.circle(-22, 16, 5).fill(0xff6622);
+        if (recoil > 0.1) {
+          playerBody
+            .circle(ax * 18, ay * 18, 6 + recoil * 10)
+            .fill({ color: 0xff6622, alpha: recoil * 0.45 });
+        }
         break;
       case "knight":
         playerBody.roundRect(-12, -4, 24, 22, 2).fill(c);
         playerBody.roundRect(-8, -14, 16, 12, 2).fill(a);
         playerBody.rect(10, 0, 6, 18).fill(0x667788);
         playerBody.rect(8, 14, 10, 4).fill(0x8899aa);
+        if (recoil > 0.05) {
+          playerBody
+            .moveTo(8, 4)
+            .lineTo(8 + ax * (24 + recoil * 20), 4 + ay * (24 + recoil * 20))
+            .stroke({ width: 4, color: a, alpha: 0.5 + recoil * 0.4 });
+        }
         break;
       case "rogue":
         playerBody.circle(0, 2, 11).fill(c);
         playerBody.moveTo(-10, -8).lineTo(0, -16).lineTo(10, -8).closePath().fill(0x224433);
         playerBody.rect(-3, 8, 6, 10).fill(a);
         playerBody.circle(12, 6, 3).fill(0xcccccc);
+        if (recoil > 0.05) {
+          playerBody
+            .moveTo(12, 6)
+            .lineTo(12 + ax * (16 + recoil * 14), 6 + ay * (16 + recoil * 14))
+            .stroke({ width: 2, color: 0xeeffcc, alpha: 0.6 + recoil * 0.35 });
+        }
         break;
       case "archer":
         playerBody.roundRect(-7, -2, 14, 18, 2).fill(c);
         playerBody.circle(0, -10, 8).fill(a);
         playerBody.moveTo(8, 4).quadraticCurveTo(18, 0, 8, 14).stroke({ width: 2, color: 0x886644 });
+        if (recoil > 0.05) {
+          playerBody
+            .moveTo(8, 4)
+            .lineTo(8 + ax * 22, 4 + ay * 22)
+            .stroke({ width: 2, color: 0xffeeaa, alpha: 0.5 + recoil * 0.45 });
+        }
         break;
     }
     if (invincible > 0 || smokeTimer > 0) {
@@ -275,11 +469,16 @@ export async function startGame(app: Application) {
     skillQCooldown = 0;
     skillRCooldown = 0;
     smokeTimer = 0;
+    attackSwingTimer = 0;
+    Object.keys(bonusSkillCooldowns).forEach((k) => {
+      delete bonusSkillCooldowns[k as Exclude<SkillUpgradeId, "skill_orbit">];
+    });
     pendingHurtNumber = 0;
     hurtNumberTimer = 0;
     pendingLevelUps = 0;
     levelUpPanel?.hide();
     clearEntities();
+    syncOrbiters();
     drawPlayerGraphic();
     playerGfx.position.set(0, 0);
   }
@@ -295,6 +494,8 @@ export async function startGame(app: Application) {
     floatingNums.length = 0;
     for (const r of spawnRings) r.gfx.destroy();
     spawnRings.length = 0;
+    for (const f of transientFx) f.gfx.destroy();
+    transientFx.length = 0;
     enemyLayer.removeChildren();
     pickupLayer.removeChildren();
     fxLayer.removeChildren();
@@ -353,6 +554,7 @@ export async function startGame(app: Application) {
       wobblePhase: Math.random() * Math.PI * 2,
       spawnTimer: getEnemySpawnDuration(kind),
       showHealthBar,
+      orbiterHitCooldown: 0,
     });
   }
 
@@ -435,6 +637,7 @@ export async function startGame(app: Application) {
     e.hitFlash = 0.12;
     e.showHealthBar = true;
     spawnFloatingNumber(e.x, e.y, amount, crit ? "crit" : "damage");
+    addTransientFx(spawnHitBurst(e.x, e.y, character.accent, crit));
     if (e.hp <= 0) killEnemy(e);
   }
 
@@ -465,27 +668,51 @@ export async function startGame(app: Application) {
     pickups.push({ x, y, kind, amount, gfx });
   }
 
-  function addProjectile(opts: Omit<Projectile, "gfx" | "life"> & { life?: number }) {
+  function addTransientFx(opts: Omit<TransientFx, "gfx">) {
     const gfx = new Graphics();
-    if (opts.isMelee) {
-      gfx.arc(0, 0, opts.radius, -0.8, 0.8).fill({ color: opts.color, alpha: 0.7 });
-    } else if (character.attackKind === "arrow") {
-      gfx.moveTo(-8, 0).lineTo(8, 0).stroke({ width: 3, color: opts.color });
-      gfx.moveTo(4, 0).lineTo(8, -3).lineTo(8, 3).closePath().fill(opts.color);
-    } else if (character.attackKind === "knife") {
-      gfx.moveTo(-4, 0).lineTo(4, 0).stroke({ width: 2, color: opts.color });
-      gfx.circle(4, 0, 2).fill(opts.color);
-    } else {
-      gfx.circle(0, 0, opts.radius).fill(opts.color);
-    }
     gfx.position.set(opts.x, opts.y);
-    if (!opts.isMelee) {
-      gfx.rotation = Math.atan2(opts.vy, opts.vx);
+    fxLayer.addChild(gfx);
+    const fx: TransientFx = { ...opts, gfx };
+    paintTransientFx(fx);
+    transientFx.push(fx);
+  }
+
+  function triggerAttackSwing(angle: number) {
+    attackSwingTimer = ATTACK_SWING_DUR;
+    attackSwingAngle = angle;
+  }
+
+  function addProjectile(
+    opts: Omit<Projectile, "gfx" | "maxLife" | "spin" | "life"> & {
+      life?: number;
+      maxLife?: number;
+      spin?: number;
+    },
+  ) {
+    const gfx = new Graphics();
+    const maxLife = opts.maxLife ?? opts.life ?? 2.5;
+    const life = opts.life ?? maxLife;
+    const spin = opts.spin ?? 0;
+    const attackKind = opts.attackKind;
+
+    if (opts.isMelee) {
+      gfx.position.set(opts.x, opts.y);
+      gfx.rotation = opts.angle;
+      drawMeleeSlash(gfx, opts.radius, opts.color, 0, 0);
+    } else {
+      drawProjectileBody(gfx, attackKind, opts.radius, opts.color, spin, 0.5);
+      gfx.position.set(opts.x, opts.y);
+      if (attackKind !== "knife") {
+        gfx.rotation = Math.atan2(opts.vy, opts.vx);
+      }
     }
+
     fxLayer.addChild(gfx);
     projectiles.push({
       ...opts,
-      life: opts.life ?? 2.5,
+      life,
+      maxLife,
+      spin,
       gfx,
     });
   }
@@ -503,6 +730,7 @@ export async function startGame(app: Application) {
     const angle = Math.atan2(target.y - playerY, target.x - playerX);
     const count = stats.multishot;
     const spread = count > 1 ? 0.25 : 0;
+    triggerAttackSwing(angle);
 
     if (character.attackKind === "melee") {
       const { amount, crit } = rollDamage(baseDmg);
@@ -515,9 +743,16 @@ export async function startGame(app: Application) {
         pierceLeft: 0,
         radius: character.range * stats.areaMult,
         color: character.accent,
+        attackKind: "melee",
+        angle,
+        crit,
         isMelee: true,
-        life: 0.15,
+        life: 0.18,
+        maxLife: 0.18,
       });
+      addTransientFx(
+        spawnMuzzleFlash(playerX, playerY, angle, character.accent, "melee"),
+      );
       for (const e of enemies) {
         const d = dist(playerX, playerY, e.x, e.y);
         if (d <= character.range * stats.areaMult) {
@@ -533,23 +768,30 @@ export async function startGame(app: Application) {
     for (let i = 0; i < count; i++) {
       const t = count === 1 ? 0 : (i / (count - 1) - 0.5) * spread;
       const a = angle + t;
-      const { amount } = rollDamage(baseDmg);
+      const { amount, crit } = rollDamage(baseDmg);
       const speed = character.projectileSpeed;
+      const color =
+        character.attackKind === "magic"
+          ? 0xff8844
+          : character.attackKind === "knife"
+            ? 0xaaffcc
+            : 0xffeeaa;
       addProjectile({
-        x: playerX,
-        y: playerY,
+        x: playerX + Math.cos(a) * 14,
+        y: playerY + Math.sin(a) * 14,
         vx: Math.cos(a) * speed,
         vy: Math.sin(a) * speed,
         damage: amount,
         pierceLeft: stats.pierce,
         radius: character.attackKind === "magic" ? 8 * stats.areaMult : 5,
-        color:
-          character.attackKind === "magic"
-            ? 0xff8844
-            : character.attackKind === "knife"
-              ? 0xaaffcc
-              : 0xffeeaa,
+        color,
+        attackKind: character.attackKind,
+        angle: a,
+        crit,
       });
+      if (i === 0) {
+        addTransientFx(spawnMuzzleFlash(playerX, playerY, a, color, character.attackKind));
+      }
     }
   }
 
@@ -564,11 +806,9 @@ export async function startGame(app: Application) {
             damageEnemy(e, 45 * stats.damageMult);
           }
         }
-        const ring = new Graphics();
-        ring.circle(0, 0, 160 * stats.areaMult).stroke({ width: 4, color: 0xff6622, alpha: 0.8 });
-        ring.position.set(playerX, playerY);
-        fxLayer.addChild(ring);
-        setTimeout(() => ring.destroy(), 200);
+        addTransientFx(
+          spawnRingFx(playerX, playerY, 160 * stats.areaMult, 0xff6622, 0.32),
+        );
         break;
       }
       case "knight": {
@@ -576,6 +816,8 @@ export async function startGame(app: Application) {
         const angle = target
           ? Math.atan2(target.y - playerY, target.x - playerX)
           : 0;
+        triggerAttackSwing(angle);
+        addTransientFx(spawnMuzzleFlash(playerX, playerY, angle, 0x88aacc, "melee"));
         for (const e of enemies) {
           const d = dist(playerX, playerY, e.x, e.y);
           if (d < 100) {
@@ -607,8 +849,12 @@ export async function startGame(app: Application) {
             pierceLeft: 3 + stats.pierce,
             radius: 5,
             color: 0xffcc44,
+            attackKind: "arrow",
+            angle: a,
+            crit: false,
           });
         }
+        addTransientFx(spawnMuzzleFlash(playerX, playerY, angle, 0xffcc44, "arrow"));
         break;
       }
     }
@@ -632,10 +878,7 @@ export async function startGame(app: Application) {
             .filter((e) => dist(cx, cy, e.x, e.y) < 180)
             .sort((a, b) => dist(cx, cy, a.x, a.y) - dist(cx, cy, b.x, b.y))[0];
           if (!next) break;
-          const bolt = new Graphics();
-          bolt.moveTo(cx, cy).lineTo(next.x, next.y).stroke({ width: 3, color: 0x66ccff });
-          fxLayer.addChild(bolt);
-          setTimeout(() => bolt.destroy(), 150);
+          addTransientFx(spawnBoltFx(cx, cy, next.x, next.y, 0x66ccff));
           damageEnemy(next, 30 * stats.damageMult);
           cx = next.x;
           cy = next.y;
@@ -644,6 +887,7 @@ export async function startGame(app: Application) {
         break;
       }
       case "knight":
+        addTransientFx(spawnRingFx(playerX, playerY, 110 * stats.areaMult, 0xddddff, 0.26));
         for (const e of [...enemies]) {
           if (dist(playerX, playerY, e.x, e.y) < 110 * stats.areaMult) {
             damageEnemy(e, 28 * stats.damageMult);
@@ -662,6 +906,9 @@ export async function startGame(app: Application) {
             pierceLeft: stats.pierce,
             radius: 4,
             color: 0x44ff88,
+            attackKind: "knife",
+            angle: a,
+            crit: false,
           });
         }
         break;
@@ -677,7 +924,11 @@ export async function startGame(app: Application) {
               pierceLeft: 0,
               radius: 6,
               color: 0xff8844,
+              attackKind: "arrow",
+              angle: Math.PI / 2,
+              crit: false,
               life: 1.2,
+              maxLife: 1.2,
             });
           }
         }
@@ -734,9 +985,17 @@ export async function startGame(app: Application) {
   }
 
   function applyUpgrade(id: UpgradeId) {
-    upgradeLevels[id] = (upgradeLevels[id] ?? 0) + 1;
+    const prev = upgradeLevels[id] ?? 0;
+    upgradeLevels[id] = prev + 1;
     stats = computeStats(character, upgradeLevels, save.shopActive);
     playerHp = Math.min(stats.maxHp, playerHp);
+    if (
+      prev === 0 &&
+      (id === "skill_meteor" || id === "skill_thunder" || id === "skill_heal")
+    ) {
+      bonusSkillCooldowns[id] = 0;
+    }
+    syncOrbiters();
     pendingLevelUps--;
     if (pendingLevelUps > 0) {
       showLevelUpMenu();
@@ -851,8 +1110,11 @@ export async function startGame(app: Application) {
     else useSkillQ();
     if (skillRCooldown > 0) skillRCooldown -= dt;
     else useSkillR();
+    tickBonusSkillCooldowns(dt);
+    useBonusSkills();
     if (invincible > 0) invincible -= dt;
     if (smokeTimer > 0) smokeTimer -= dt;
+    if (attackSwingTimer > 0) attackSwingTimer -= dt;
     if (playerHp < stats.maxHp) playerHp = Math.min(stats.maxHp, playerHp + stats.regen * dt);
 
     attackTimer -= dt;
@@ -885,6 +1147,7 @@ export async function startGame(app: Application) {
 
       e.wobblePhase += dt * getEnemyWobbleRate(e.kind);
       if (e.hitFlash > 0) e.hitFlash -= dt;
+      if (e.orbiterHitCooldown > 0) e.orbiterHitCooldown -= dt;
 
       e.container.position.set(e.x, e.y);
       updateEnemyAnimation(
@@ -918,24 +1181,47 @@ export async function startGame(app: Application) {
       }
     }
 
+    if (skillLv("skill_orbit") > 0) {
+      orbiterSystem.update(dt, playerX, playerY, enemies, (index, damage) => {
+        const e = enemies[index];
+        if (e && e.spawnTimer <= 0) damageEnemy(e, damage);
+      });
+    }
+
     for (let i = projectiles.length - 1; i >= 0; i--) {
       const p = projectiles[i];
       p.life -= dt;
+
       if (p.isMelee) {
+        const progress = 1 - p.life / p.maxLife;
+        p.gfx.position.set(p.x, p.y);
+        p.gfx.rotation = p.angle;
+        drawMeleeSlash(p.gfx, p.radius, p.color, 0, progress);
         if (p.life <= 0) {
           p.gfx.destroy();
           projectiles.splice(i, 1);
         }
         continue;
       }
+
+      p.spin += dt * 24;
       p.x += p.vx * dt;
       p.y += p.vy * dt;
+      const speed = Math.hypot(p.vx, p.vy);
+      const trail = Math.min(1, speed / 400);
       p.gfx.position.set(p.x, p.y);
+      if (p.attackKind === "knife") {
+        p.gfx.rotation = Math.atan2(p.vy, p.vx) + p.spin;
+      } else {
+        p.gfx.rotation = Math.atan2(p.vy, p.vx);
+      }
+      drawProjectileBody(p.gfx, p.attackKind, p.radius, p.color, p.spin, trail);
+
       let hit = false;
       for (let j = enemies.length - 1; j >= 0; j--) {
         const e = enemies[j];
         if (dist(p.x, p.y, e.x, e.y) < e.radius + p.radius) {
-          damageEnemy(e, p.damage);
+          damageEnemy(e, p.damage, p.crit);
           if (p.pierceLeft > 0) {
             p.pierceLeft--;
           } else {
@@ -947,6 +1233,16 @@ export async function startGame(app: Application) {
       if (hit || p.life <= 0 || Math.abs(p.x) > ARENA || Math.abs(p.y) > ARENA) {
         p.gfx.destroy();
         projectiles.splice(i, 1);
+      }
+    }
+
+    for (let i = transientFx.length - 1; i >= 0; i--) {
+      const fx = transientFx[i];
+      fx.life -= dt;
+      paintTransientFx(fx);
+      if (fx.life <= 0) {
+        fx.gfx.destroy();
+        transientFx.splice(i, 1);
       }
     }
 
@@ -1026,12 +1322,7 @@ export async function startGame(app: Application) {
       wave,
       time: formatTime(gameTime),
       gold: runGold,
-      skillQ: skillQCooldown,
-      skillR: skillRCooldown,
-      skillQName: character.skillQ.name,
-      skillRName: character.skillR.name,
-      skillQMax: character.skillQ.cooldown * stats.cooldownMult,
-      skillRMax: character.skillR.cooldown * stats.cooldownMult,
+      skills: buildHudSkills(),
       visible: phase === "playing" || phase === "levelUp" || phase === "paused",
     });
   }
@@ -1169,25 +1460,30 @@ export async function startGame(app: Application) {
     title.position.set(w / 2, h / 2 - 210);
     c.addChild(title);
 
+    const cardW = 168;
+    const cardH = 196;
+    const totalCardsW = CHARACTERS.length * cardW;
+    const cardsStartX = w / 2 - totalCardsW / 2;
+
     CHARACTERS.forEach((ch, i) => {
       const card = new Container();
       card.eventMode = "static";
       card.cursor = "pointer";
       const focused = charFocus === i;
       const g = new Graphics();
-      drawPanelFrame(g, 168, 196);
+      drawPanelFrame(g, cardW, cardH);
       if (focused) {
-        g.rect(0, 0, 168, 196).stroke({ width: 4, color: UI.cardSelected });
+        g.rect(0, 0, cardW, cardH).stroke({ width: 4, color: UI.cardSelected });
       }
       const preview = new Graphics();
-      preview.circle(84, 58, 18).fill(ch.accent);
-      preview.roundRect(74, 72, 20, 26, 2).fill(ch.color);
+      preview.circle(cardW / 2, 58, 18).fill(ch.accent);
+      preview.roundRect(cardW / 2 - 10, 72, 20, 26, 2).fill(ch.color);
       const name = new Text({
         text: ch.name,
         style: { fill: UI.textPrimary, fontSize: 15, fontFamily: FONT, fontWeight: "bold" },
       });
       name.anchor.set(0.5);
-      name.position.set(84, 118);
+      name.position.set(cardW / 2, 118);
       const tag = new Text({
         text: ch.tagline,
         style: {
@@ -1200,10 +1496,10 @@ export async function startGame(app: Application) {
         },
       });
       tag.anchor.set(0.5);
-      tag.position.set(84, 152);
+      tag.position.set(cardW / 2, 152);
       card.addChild(g, preview, name, tag);
-      setClickHitArea(card, 168, 196);
-      card.position.set(w / 2 - 252 + i * 168, h / 2 - 70);
+      setClickHitArea(card, cardW, cardH);
+      card.position.set(cardsStartX + i * cardW, h / 2 - 70);
       card.on("pointertap", () => {
         resetRun(ch.id);
         phase = "playing";
@@ -1230,6 +1526,7 @@ export async function startGame(app: Application) {
         "Space — dash (brief invincibility)\n" +
         "Esc / P — pause\n\n" +
         "Auto-attack and skills fire automatically.\n" +
+        "Some upgrades unlock bonus skills (orbit, meteor, thunder, heal).\n" +
         "Collect XP gems to level up and pick upgrades.\n" +
         "Collect gold to buy permanent shop buffs.\n" +
         "All upgrades stack — build the strongest combo!\n\n" +

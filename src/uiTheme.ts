@@ -76,4 +76,8 @@ export const UPGRADE_ACCENT: Record<UpgradeId, number> = {
   wisdom: 0xddcc88,
   crit: 0xffcc44,
   cooldown: 0x55cc77,
+  skill_orbit: 0xff5544,
+  skill_meteor: 0xff6622,
+  skill_thunder: 0x66ccff,
+  skill_heal: 0x55dd77,
 };

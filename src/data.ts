@@ -261,7 +261,11 @@ export type UpgradeId =
   | "magnet"
   | "wisdom"
   | "crit"
-  | "cooldown";
+  | "cooldown"
+  | "skill_orbit"
+  | "skill_meteor"
+  | "skill_thunder"
+  | "skill_heal";
 
 export interface UpgradeDef {
   id: UpgradeId;
@@ -362,6 +366,34 @@ export const UPGRADES: UpgradeDef[] = [
     desc: "-8% skill cooldown",
     icon: "⏱",
     maxLevel: 99,
+  },
+  {
+    id: "skill_orbit",
+    name: "Orbiting Blades",
+    desc: "Unlock orbiting blades",
+    icon: "◈",
+    maxLevel: 3,
+  },
+  {
+    id: "skill_meteor",
+    name: "Meteor Shower",
+    desc: "Unlock meteor strikes",
+    icon: "☄",
+    maxLevel: 3,
+  },
+  {
+    id: "skill_thunder",
+    name: "Thunder Strike",
+    desc: "Unlock thunder bolts",
+    icon: "⚡",
+    maxLevel: 3,
+  },
+  {
+    id: "skill_heal",
+    name: "Healing Aura",
+    desc: "Unlock healing pulses",
+    icon: "✚",
+    maxLevel: 3,
   },
 ];
 

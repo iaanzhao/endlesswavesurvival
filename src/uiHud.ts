@@ -2,6 +2,13 @@ import { Container, Graphics, Text } from "pixi.js";
 import { drawBar, drawCoinIcon, drawSkillSlotIcon } from "./uiDraw";
 import { FONT, UI } from "./uiTheme";
 
+export interface HudSkillSlot {
+  name: string;
+  cd: number;
+  maxCd: number;
+  passive?: boolean;
+}
+
 export interface GameHud {
   root: Container;
   layout(w: number, h: number): void;
@@ -14,15 +21,13 @@ export interface GameHud {
     wave: number;
     time: string;
     gold: number;
-    skillQ: number;
-    skillR: number;
-    skillQName: string;
-    skillRName: string;
-    skillQMax: number;
-    skillRMax: number;
+    skills: HudSkillSlot[];
     visible: boolean;
   }): void;
 }
+
+const SLOT_SIZE = 52;
+const MAX_SKILL_SLOTS = 6;
 
 export function createGameHud(): GameHud {
   const root = new Container();
@@ -86,14 +91,14 @@ export function createGameHud(): GameHud {
   });
 
   const skillsRoot = new Container();
-  const skillSlots = [0, 1].map(() => {
+  const skillSlots = Array.from({ length: MAX_SKILL_SLOTS }, () => {
     const slot = new Container();
     const icon = new Graphics();
     const name = new Text({
       text: "",
       style: {
         fill: UI.textPrimary,
-        fontSize: 10,
+        fontSize: 9,
         fontFamily: FONT,
         fontWeight: "bold",
         align: "center",
@@ -127,10 +132,14 @@ export function createGameHud(): GameHud {
   );
 
   const barW = 200;
+  let lastW = 800;
+  let lastH = 600;
 
   return {
     root,
     layout(w, h) {
+      lastW = w;
+      lastH = h;
       hpLabel.position.set(18, 8);
       xpLabel.position.set(18, 30);
       lvlText.position.set(16, 50);
@@ -138,9 +147,6 @@ export function createGameHud(): GameHud {
       waveText.position.set(w / 2, 38);
       coinWrap.position.set(w - 72, 14);
       versionText.position.set(12, h - 22);
-      skillsRoot.position.set(w - 16 - 52 * 2, h - 72);
-      skillSlots[0].slot.position.set(0, 0);
-      skillSlots[1].slot.position.set(52, 0);
     },
     update(opts) {
       root.visible = opts.visible;
@@ -160,18 +166,28 @@ export function createGameHud(): GameHud {
       waveText.text = `Wave ${opts.wave}`;
       coinText.text = String(opts.gold);
 
-      const skillData = [
-        { name: opts.skillQName, cd: opts.skillQ, max: opts.skillQMax },
-        { name: opts.skillRName, cd: opts.skillR, max: opts.skillRMax },
-      ];
+      const count = opts.skills.length;
+      const totalW = count * SLOT_SIZE;
+      skillsRoot.position.set(lastW - 16 - totalW, lastH - 72);
 
       skillSlots.forEach((ui, i) => {
-        const data = skillData[i];
-        const ready = data.cd <= 0;
+        const data = opts.skills[i];
+        if (!data) {
+          ui.slot.visible = false;
+          return;
+        }
+        ui.slot.visible = true;
+        ui.slot.position.set(i * SLOT_SIZE, 0);
+        const ready = data.passive || data.cd <= 0;
         drawSkillSlotIcon(ui.icon, ready);
         ui.name.text = data.name.split(" ")[0];
-        ui.cd.text = ready ? "" : data.cd.toFixed(1);
-        ui.cd.style.fill = ready ? UI.textGreen : UI.textPrimary;
+        if (data.passive) {
+          ui.cd.text = "●";
+          ui.cd.style.fill = UI.textGreen;
+        } else {
+          ui.cd.text = ready ? "" : data.cd.toFixed(1);
+          ui.cd.style.fill = ready ? UI.textGreen : UI.textPrimary;
+        }
       });
     },
   };

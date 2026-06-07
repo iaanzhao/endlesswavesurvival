@@ -301,6 +301,22 @@ export function drawUpgradeIcon(
       g.rect(x + 13, y + 7, 5, 14).fill(0x55cc77);
       g.rect(x + 13, y + 7, 5, 4).fill({ color: 0xffffff, alpha: 0.25 });
       break;
+    case "skill_orbit":
+      g.circle(cx, cy, 11).stroke({ width: 2, color: 0xff5544 });
+      g.moveTo(cx, cy - 9).lineTo(cx + 8, cy + 6).lineTo(cx - 8, cy + 6).closePath().fill(0xff5544);
+      break;
+    case "skill_meteor":
+      g.circle(cx, cy + 4, 8).fill(0xff6622);
+      g.moveTo(cx - 6, cy - 8).lineTo(cx, cy - 14).lineTo(cx + 6, cy - 8).fill(0xffaa44);
+      break;
+    case "skill_thunder":
+      g.moveTo(cx - 4, cy - 10).lineTo(cx + 2, cy).lineTo(cx - 2, cy).lineTo(cx + 4, cy + 10).fill(0x66ccff);
+      break;
+    case "skill_heal":
+      g.circle(cx, cy, 10).fill({ color: 0x55dd77, alpha: 0.35 });
+      g.rect(x + 13, y + 7, 6, 14).fill(0x55dd77);
+      g.rect(x + 9, y + 11, 14, 6).fill(0x88ffaa);
+      break;
     default:
       g.rect(x + 6, y + 6, 20, 20).fill(0x888899);
   }
