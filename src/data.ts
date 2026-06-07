@@ -493,6 +493,77 @@ export function getCharacter(id: CharacterId): CharacterDef {
   return CHARACTERS.find((c) => c.id === id) ?? CHARACTERS[0];
 }
 
+export type DifficultyId = "easy" | "normal" | "hard";
+
+export interface DifficultyDef {
+  id: DifficultyId;
+  name: string;
+  desc: string;
+  enemyHpMult: number;
+  enemyDamageMult: number;
+  enemySpeedMult: number;
+  spawnIntervalMult: number;
+  spawnBatchMult: number;
+  rewardMult: number;
+}
+
+export const DIFFICULTIES: DifficultyDef[] = [
+  {
+    id: "easy",
+    name: "Easy",
+    desc: "Weaker enemies, slower spawns",
+    enemyHpMult: 0.82,
+    enemyDamageMult: 0.75,
+    enemySpeedMult: 0.92,
+    spawnIntervalMult: 1.2,
+    spawnBatchMult: 0.85,
+    rewardMult: 0.9,
+  },
+  {
+    id: "normal",
+    name: "Normal",
+    desc: "Balanced challenge",
+    enemyHpMult: 1,
+    enemyDamageMult: 1,
+    enemySpeedMult: 1,
+    spawnIntervalMult: 1,
+    spawnBatchMult: 1,
+    rewardMult: 1,
+  },
+  {
+    id: "hard",
+    name: "Hard",
+    desc: "Tougher foes, faster waves",
+    enemyHpMult: 1.35,
+    enemyDamageMult: 1.28,
+    enemySpeedMult: 1.1,
+    spawnIntervalMult: 0.82,
+    spawnBatchMult: 1.2,
+    rewardMult: 1.15,
+  },
+];
+
+export function getDifficulty(id: DifficultyId): DifficultyDef {
+  return DIFFICULTIES.find((d) => d.id === id) ?? DIFFICULTIES[1];
+}
+
+export function spawnIntervalForWave(wave: number, difficulty?: DifficultyDef): number {
+  const base = Math.max(0.25, 1.4 - wave * 0.035);
+  return base * (difficulty?.spawnIntervalMult ?? 1);
+}
+
+export function spawnBatchForWave(wave: number, difficulty?: DifficultyDef): number {
+  const base = 1 + Math.floor(wave / 6);
+  return Math.max(1, Math.round(base * (difficulty?.spawnBatchMult ?? 1)));
+}
+
+export function waveEnemyHpBonus(wave: number, kind: EnemyKind): number {
+  const base = wave * 4 + Math.floor(wave / 5) * 8;
+  if (kind === "brute") return base * 1.5;
+  if (kind === "slimeBig") return base * 1.2;
+  return base;
+}
+
 export function getUpgrade(id: UpgradeId): UpgradeDef {
   return UPGRADES.find((u) => u.id === id) ?? UPGRADES[0];
 }
@@ -560,19 +631,4 @@ export function pickWeightedEnemy(wave: number): EnemyKind {
     if (roll <= 0) return kind;
   }
   return "slimeSmall";
-}
-
-export function waveEnemyHpBonus(wave: number, kind: EnemyKind): number {
-  const base = wave * 4 + Math.floor(wave / 5) * 8;
-  if (kind === "brute") return base * 1.5;
-  if (kind === "slimeBig") return base * 1.2;
-  return base;
-}
-
-export function spawnIntervalForWave(wave: number): number {
-  return Math.max(0.25, 1.4 - wave * 0.035);
-}
-
-export function spawnBatchForWave(wave: number): number {
-  return 1 + Math.floor(wave / 6);
 }

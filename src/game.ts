@@ -11,7 +11,9 @@ import {
   SHOP_ITEMS,
   UPGRADES,
   computeStats,
+  DIFFICULTIES,
   getCharacter,
+  getDifficulty,
   pickWeightedEnemy,
   spawnBatchForWave,
   spawnIntervalForWave,
@@ -20,6 +22,7 @@ import {
   type AttackKind,
   type CharacterDef,
   type CharacterId,
+  type DifficultyId,
   type EnemyKind,
   type UpgradeId,
 } from "./data";
@@ -47,6 +50,11 @@ import {
   type TransientFx,
 } from "./attackFx";
 import {
+  buildDeathScreen,
+  buildDeathSummaryOverlay,
+  type DeathScreenStats,
+} from "./uiDeath";
+import {
   buildStatisticsPanel,
   STATS_SCROLL_MAX,
 } from "./uiStatistics";
@@ -73,7 +81,7 @@ type Phase =
   | "playing"
   | "levelUp"
   | "paused"
-  | "gameOver"
+  | "death"
   | "shop"
   | "statistics"
   | "help";
@@ -169,8 +177,13 @@ export async function startGame(app: Application) {
 
   let phase: Phase = "mainMenu";
   let charFocus = 0;
+  let difficultyFocus = 1;
+  let charSelectSection: "hero" | "difficulty" = "hero";
+  let activeDifficultyId: DifficultyId = "normal";
   let menuFocus = 0;
   let statsScroll = 0;
+  let deathSummaryActive = false;
+  let lastDeathStats: DeathScreenStats | null = null;
   let shopFocus = 0;
   let pauseMenuFocus = 0;
   let activeCharacterId: CharacterId = "mage";
@@ -467,6 +480,16 @@ export async function startGame(app: Application) {
     }
   }
 
+  function getActiveDifficulty() {
+    return getDifficulty(activeDifficultyId);
+  }
+
+  function startRun(charId: CharacterId) {
+    resetRun(charId);
+    phase = "playing";
+    layoutOverlay();
+  }
+
   function resetRun(charId: CharacterId) {
     activeCharacterId = charId;
     character = getCharacter(charId);
@@ -549,7 +572,8 @@ export async function startGame(app: Application) {
   function addEnemy(kind: EnemyKind) {
     const pos = spawnFromEdge();
     const base = ENEMY_DEFS[kind];
-    const maxHp = base.hp + waveEnemyHpBonus(wave, kind);
+    const diff = getActiveDifficulty();
+    const maxHp = Math.round((base.hp + waveEnemyHpBonus(wave, kind)) * diff.enemyHpMult);
     const { container, healthBar } = createEnemyGraphic(kind);
     container.position.set(pos.x, pos.y);
     const barW = getEnemyHealthBarWidth(kind);
@@ -564,11 +588,11 @@ export async function startGame(app: Application) {
       y: pos.y,
       hp: maxHp,
       maxHp,
-      speed: base.speed + wave * 1.2,
+      speed: (base.speed + wave * 1.2) * diff.enemySpeedMult,
       radius: base.radius,
-      damage: base.damage + Math.floor(wave / 8),
-      xp: base.xp,
-      gold: base.gold,
+      damage: (base.damage + Math.floor(wave / 8)) * diff.enemyDamageMult,
+      xp: Math.round(base.xp * diff.rewardMult),
+      gold: Math.round(base.gold * diff.rewardMult),
       container,
       healthBar,
       hitFlash: 0,
@@ -1127,9 +1151,38 @@ export async function startGame(app: Application) {
     saveGame(save);
   }
 
+  function getDeathStats(): DeathScreenStats {
+    return {
+      heroName: character.name,
+      time: formatTime(gameTime),
+      kills,
+      gold: runGold,
+      level: playerLevel,
+      wave,
+    };
+  }
+
+  function finishDeathAndGoHome() {
+    lastDeathStats = getDeathStats();
+    clearEntities();
+    phase = "mainMenu";
+    deathSummaryActive = true;
+    menuFocus = 0;
+    layoutOverlay();
+  }
+
+  function dismissDeathSummary() {
+    deathSummaryActive = false;
+    lastDeathStats = null;
+    layoutOverlay();
+  }
+
   function endRun() {
-    phase = "gameOver";
+    phase = "death";
     saveRunProgress();
+    updateCamera();
+    layoutOverlay();
+    updateHudDisplay();
   }
 
   function openPause() {
@@ -1155,6 +1208,8 @@ export async function startGame(app: Application) {
   function quitToMainMenu() {
     saveRunProgress();
     phase = "mainMenu";
+    deathSummaryActive = false;
+    lastDeathStats = null;
     clearEntities();
     layoutOverlay();
   }
@@ -1208,9 +1263,10 @@ export async function startGame(app: Application) {
 
     spawnTimer -= dt;
     if (spawnTimer <= 0) {
-      const batch = spawnBatchForWave(wave);
+      const diff = getActiveDifficulty();
+      const batch = spawnBatchForWave(wave, diff);
       for (let i = 0; i < batch; i++) addEnemy(pickWeightedEnemy(wave));
-      spawnTimer = spawnIntervalForWave(wave);
+      spawnTimer = spawnIntervalForWave(wave, diff);
     }
 
     for (const e of enemies) {
@@ -1420,6 +1476,17 @@ export async function startGame(app: Application) {
     hud.layout(app.screen.width, app.screen.height);
   }
 
+  function scrollStatistics(deltaY: number) {
+    if (deltaY === 0 || STATS_SCROLL_MAX <= 0) return;
+    const step = Math.max(1, Math.round(Math.abs(deltaY) / 50));
+    if (deltaY > 0) {
+      statsScroll = Math.min(STATS_SCROLL_MAX, statsScroll + step);
+    } else {
+      statsScroll = Math.max(0, statsScroll - step);
+    }
+    layoutOverlay();
+  }
+
   function layoutOverlay() {
     overlay.removeChildren();
     const w = app.screen.width;
@@ -1441,16 +1508,18 @@ export async function startGame(app: Application) {
         buildStatisticsPanel(w, h, statsScroll, () => {
           phase = "mainMenu";
           layoutOverlay();
-        }),
+        }, scrollStatistics),
       );
     } else if (phase === "help") {
       overlay.addChild(buildHelp(w, h));
     } else if (phase === "shop") {
       overlay.addChild(buildShopPanel(w, h));
+    } else if (phase === "death") {
+      overlay.addChild(
+        buildDeathScreen(w, h, getDeathStats(), finishDeathAndGoHome),
+      );
     } else if (phase === "paused") {
       overlay.addChild(buildPauseMenu(w, h));
-    } else if (phase === "gameOver") {
-      overlay.addChild(buildGameOver(w, h));
     }
   }
 
@@ -1512,6 +1581,8 @@ export async function startGame(app: Application) {
     const items = ["NEW GAME", "SHOP", "STATISTICS", "HOW TO PLAY"];
     const actions = [
       () => {
+        charSelectSection = "hero";
+        charFocus = 0;
         phase = "characterSelect";
         layoutOverlay();
       },
@@ -1543,29 +1614,40 @@ export async function startGame(app: Application) {
     stats.anchor.set(0.5);
     stats.position.set(w / 2, h - 36);
     c.addChild(title, stats);
+
+    if (deathSummaryActive && lastDeathStats) {
+      c.addChild(
+        buildDeathSummaryOverlay(w, h, lastDeathStats, dismissDeathSummary),
+      );
+    }
+
     return c;
   }
 
   function buildCharacterSelect(w: number, h: number): Container {
-    const c = panelBg(w, h, 760, 500);
+    const panelH = 560;
+    const c = panelBg(w, h, 760, panelH);
+    const panelTop = h / 2 - panelH / 2;
+
     const title = new Text({
       text: "Choose your hero",
       style: titleStyle,
     });
     title.anchor.set(0.5);
-    title.position.set(w / 2, h / 2 - 210);
+    title.position.set(w / 2, panelTop + 44);
     c.addChild(title);
 
     const cardW = 168;
     const cardH = 196;
     const totalCardsW = CHARACTERS.length * cardW;
     const cardsStartX = w / 2 - totalCardsW / 2;
+    const cardsY = panelTop + 88;
 
     CHARACTERS.forEach((ch, i) => {
       const card = new Container();
       card.eventMode = "static";
       card.cursor = "pointer";
-      const focused = charFocus === i;
+      const focused = charSelectSection === "hero" && charFocus === i;
       const g = new Graphics();
       drawPanelFrame(g, cardW, cardH);
       if (focused) {
@@ -1595,21 +1677,100 @@ export async function startGame(app: Application) {
       tag.position.set(cardW / 2, 152);
       card.addChild(g, preview, name, tag);
       setClickHitArea(card, cardW, cardH);
-      card.position.set(cardsStartX + i * cardW, h / 2 - 70);
+      card.position.set(cardsStartX + i * cardW, cardsY);
       card.on("pointertap", () => {
-        resetRun(ch.id);
-        phase = "playing";
-        layoutOverlay();
+        charFocus = i;
+        startRun(ch.id);
       });
       c.addChild(card);
+    });
+
+    const diffSectionY = cardsY + cardH + 28;
+    const diffLabel = new Text({
+      text: "Select difficulty",
+      style: {
+        fill: charSelectSection === "difficulty" ? UI.cardSelectedGlow : UI.textMuted,
+        fontSize: 14,
+        fontFamily: FONT,
+        letterSpacing: 2,
+        fontWeight: "bold",
+      },
+    });
+    diffLabel.anchor.set(0.5);
+    diffLabel.position.set(w / 2, diffSectionY);
+    c.addChild(diffLabel);
+
+    const diffBtnW = 148;
+    const diffGap = 14;
+    const totalDiffW = DIFFICULTIES.length * diffBtnW + (DIFFICULTIES.length - 1) * diffGap;
+    const diffStartX = w / 2 - totalDiffW / 2;
+    const diffBtnY = diffSectionY + 28;
+
+    DIFFICULTIES.forEach((diff, i) => {
+      const btn = new Container();
+      btn.eventMode = "static";
+      btn.cursor = "pointer";
+      const selected =
+        charSelectSection === "difficulty" && difficultyFocus === i;
+      const active = activeDifficultyId === diff.id;
+      const g = new Graphics();
+      drawPanelFrame(g, diffBtnW, 72);
+      if (selected) {
+        g.rect(0, 0, diffBtnW, 72).stroke({ width: 3, color: UI.cardSelected });
+      } else if (active) {
+        g.rect(0, 0, diffBtnW, 72).stroke({ width: 2, color: UI.cardBorderHi, alpha: 0.8 });
+      }
+      const name = new Text({
+        text: diff.name,
+        style: {
+          fill: UI.textPrimary,
+          fontSize: 14,
+          fontFamily: FONT,
+          fontWeight: "bold",
+        },
+      });
+      name.anchor.set(0.5);
+      name.position.set(diffBtnW / 2, 24);
+      const desc = new Text({
+        text: diff.desc,
+        style: {
+          fill: UI.textDim,
+          fontSize: 9,
+          fontFamily: FONT,
+          wordWrap: true,
+          wordWrapWidth: diffBtnW - 16,
+          align: "center",
+        },
+      });
+      desc.anchor.set(0.5);
+      desc.position.set(diffBtnW / 2, 50);
+      btn.addChild(g, name, desc);
+      setClickHitArea(btn, diffBtnW, 72);
+      btn.position.set(diffStartX + i * (diffBtnW + diffGap), diffBtnY);
+      btn.on("pointertap", () => {
+        difficultyFocus = i;
+        activeDifficultyId = diff.id;
+        charSelectSection = "difficulty";
+        layoutOverlay();
+      });
+      c.addChild(btn);
     });
 
     const back = menuBtn("BACK", () => {
       phase = "mainMenu";
       layoutOverlay();
     });
-    back.position.set(w / 2 - 140, h / 2 + 180);
+    back.position.set(w / 2 - 140, diffBtnY + 108);
     c.addChild(back);
+
+    const hint = new Text({
+      text: "↑↓ hero / difficulty  ·  ←→ select  ·  Enter start",
+      style: { fill: UI.textDim, fontSize: 11, fontFamily: FONT },
+    });
+    hint.anchor.set(0.5);
+    hint.position.set(w / 2, panelTop + panelH - 22);
+    c.addChild(hint);
+
     return c;
   }
 
@@ -1732,7 +1893,7 @@ export async function startGame(app: Application) {
 
     const stats = new Text({
       text:
-        `${character.name}  ·  Lv ${playerLevel}  ·  Wave ${wave}\n` +
+        `${character.name}  ·  ${getActiveDifficulty().name}  ·  Lv ${playerLevel}  ·  Wave ${wave}\n` +
         `${formatTime(gameTime)}  ·  ${kills} kills  ·  ${runGold} gold`,
       style: bodyStyle,
     });
@@ -1762,41 +1923,21 @@ export async function startGame(app: Application) {
     return c;
   }
 
-  function buildGameOver(w: number, h: number): Container {
-    const c = panelBg(w, h, 520, 360);
-    const title = new Text({
-      text: "Game Over",
-      style: { ...titleStyle, fill: UI.textRed },
-    });
-    title.anchor.set(0.5);
-    title.position.set(w / 2, h / 2 - 120);
-    const statsText = new Text({
-      text:
-        `Time survived: ${formatTime(gameTime)}\n` +
-        `Kills: ${kills}\n` +
-        `Gold earned: ${runGold}\n` +
-        `Level reached: ${playerLevel}`,
-      style: bodyStyle,
-    });
-    statsText.anchor.set(0.5);
-    statsText.position.set(w / 2, h / 2 - 20);
-    c.addChild(title, statsText);
-    const again = menuBtn("PLAY AGAIN", () => {
-      phase = "characterSelect";
-      layoutOverlay();
-    }, true);
-    again.position.set(w / 2 - 140, h / 2 + 70);
-    const menu = menuBtn("MAIN MENU", () => {
-      phase = "mainMenu";
-      clearEntities();
-      layoutOverlay();
-    });
-    menu.position.set(w / 2 - 140, h / 2 + 142);
-    c.addChild(again, menu);
-    return c;
-  }
-
   function handleMenuInput() {
+    if (phase === "death") {
+      if (input.pressed("Enter") || input.pressed("Space")) {
+        finishDeathAndGoHome();
+      }
+      return;
+    }
+
+    if (phase === "mainMenu" && deathSummaryActive) {
+      if (input.pressed("Enter") || input.pressed("Space") || input.pressed("Escape")) {
+        dismissDeathSummary();
+      }
+      return;
+    }
+
     if (phase === "mainMenu") {
       if (input.pressed("ArrowUp") || input.pressed("KeyW")) {
         menuFocus = (menuFocus + 3) % 4;
@@ -1819,30 +1960,47 @@ export async function startGame(app: Application) {
       }
     } else if (phase === "statistics") {
       if (input.pressed("ArrowUp") || input.pressed("KeyW")) {
-        statsScroll = Math.max(0, statsScroll - 1);
-        layoutOverlay();
+        scrollStatistics(-50);
       }
       if (input.pressed("ArrowDown") || input.pressed("KeyS")) {
-        statsScroll = Math.min(STATS_SCROLL_MAX, statsScroll + 1);
-        layoutOverlay();
+        scrollStatistics(50);
       }
       if (input.pressed("Escape")) {
         phase = "mainMenu";
         layoutOverlay();
       }
     } else if (phase === "characterSelect") {
-      if (input.pressed("ArrowLeft") || input.pressed("KeyA")) {
-        charFocus = (charFocus + 3) % 4;
-        layoutOverlay();
-      }
-      if (input.pressed("ArrowRight") || input.pressed("KeyD")) {
-        charFocus = (charFocus + 1) % 4;
-        layoutOverlay();
+      if (charSelectSection === "hero") {
+        if (input.pressed("ArrowLeft") || input.pressed("KeyA")) {
+          charFocus = (charFocus + 3) % 4;
+          layoutOverlay();
+        }
+        if (input.pressed("ArrowRight") || input.pressed("KeyD")) {
+          charFocus = (charFocus + 1) % 4;
+          layoutOverlay();
+        }
+        if (input.pressed("ArrowDown") || input.pressed("KeyS")) {
+          charSelectSection = "difficulty";
+          layoutOverlay();
+        }
+      } else {
+        if (input.pressed("ArrowLeft") || input.pressed("KeyA")) {
+          difficultyFocus = (difficultyFocus + DIFFICULTIES.length - 1) % DIFFICULTIES.length;
+          activeDifficultyId = DIFFICULTIES[difficultyFocus].id;
+          layoutOverlay();
+        }
+        if (input.pressed("ArrowRight") || input.pressed("KeyD")) {
+          difficultyFocus = (difficultyFocus + 1) % DIFFICULTIES.length;
+          activeDifficultyId = DIFFICULTIES[difficultyFocus].id;
+          layoutOverlay();
+        }
+        if (input.pressed("ArrowUp") || input.pressed("KeyW")) {
+          charSelectSection = "hero";
+          layoutOverlay();
+        }
       }
       if (input.pressed("Enter") || input.pressed("Space")) {
-        resetRun(CHARACTERS[charFocus].id);
-        phase = "playing";
-        layoutOverlay();
+        startRun(CHARACTERS[charFocus].id);
       }
       if (input.pressed("Escape")) {
         phase = "mainMenu";
@@ -1881,9 +2039,9 @@ export async function startGame(app: Application) {
         else if (pauseMenuFocus === 1) restartFromPause();
         else quitToMainMenu();
       }
-    } else if (phase === "shop" || phase === "help" || phase === "gameOver") {
+    } else if (phase === "shop" || phase === "help") {
       if (input.pressed("Escape") || input.pressed("Enter")) {
-        phase = phase === "gameOver" ? "characterSelect" : "mainMenu";
+        phase = "mainMenu";
         layoutOverlay();
       }
       if (phase === "shop") {

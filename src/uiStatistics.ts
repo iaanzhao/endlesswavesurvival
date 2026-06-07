@@ -1,4 +1,4 @@
-import { Container, Graphics, Text } from "pixi.js";
+import { Container, Graphics, Text, type FederatedWheelEvent } from "pixi.js";
 import { SKILL_STAT_ENTRIES, type SkillStatEntry } from "./statCatalog";
 import {
   drawMenuButtonBg,
@@ -113,6 +113,7 @@ export function buildStatisticsPanel(
   h: number,
   scroll: number,
   onBack: () => void,
+  onScroll: (deltaY: number) => void,
 ): Container {
   const pw = 760;
   const ph = 560;
@@ -140,7 +141,7 @@ export function buildStatisticsPanel(
   c.addChild(title);
 
   const subtitle = new Text({
-    text: "Base values before run upgrades · ↑↓ scroll",
+    text: "Base values before run upgrades · ↑↓ or scroll wheel",
     style: {
       fill: UI.textDim,
       fontSize: 11,
@@ -169,6 +170,18 @@ export function buildStatisticsPanel(
     drawStatRow(row, entry, listW, false);
     list.addChild(row);
   });
+
+  const scrollZone = new Graphics();
+  scrollZone
+    .rect(ox + 16, listTop - 4, pw - 32, listH + 8)
+    .fill({ color: 0xffffff, alpha: 0.001 });
+  scrollZone.eventMode = "static";
+  scrollZone.cursor = "default";
+  scrollZone.on("wheel", (e: FederatedWheelEvent) => {
+    e.preventDefault();
+    if (e.deltaY !== 0) onScroll(e.deltaY);
+  });
+  c.addChild(scrollZone);
 
   if (STATS_SCROLL_MAX > 0) {
     const trackH = listH - 16;
