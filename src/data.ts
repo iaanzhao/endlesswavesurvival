@@ -49,7 +49,7 @@ export const CHARACTERS: CharacterDef[] = [
     skillR: {
       name: "Chain Lightning",
       desc: "Lightning jumps between enemies",
-      cooldown: 8,
+      cooldown: 5,
       color: 0x66ccff,
     },
   },

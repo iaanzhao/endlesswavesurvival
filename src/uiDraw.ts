@@ -2,6 +2,38 @@ import { Graphics } from "pixi.js";
 import type { UpgradeId } from "./data";
 import { UI, UPGRADE_ACCENT } from "./uiTheme";
 
+export type ClassSkillIconId =
+  | "class_mage_q"
+  | "class_mage_r"
+  | "class_knight_q"
+  | "class_knight_r"
+  | "class_rogue_q"
+  | "class_rogue_r"
+  | "class_archer_q"
+  | "class_archer_r";
+
+export type StatIconId = UpgradeId | ClassSkillIconId;
+
+const CLASS_SKILL_ACCENT: Record<ClassSkillIconId, number> = {
+  class_mage_q: 0xff6644,
+  class_mage_r: 0x66ccff,
+  class_knight_q: 0x8899bb,
+  class_knight_r: 0xddddff,
+  class_rogue_q: 0x888888,
+  class_rogue_r: 0x44ff88,
+  class_archer_q: 0xffcc44,
+  class_archer_r: 0xff8844,
+};
+
+function statIconAccent(id: StatIconId): number {
+  if (id in CLASS_SKILL_ACCENT) {
+    return CLASS_SKILL_ACCENT[id as ClassSkillIconId];
+  }
+  return UPGRADE_ACCENT[id as UpgradeId] ?? 0x888899;
+}
+
+export { statIconAccent };
+
 function drawCornerBrackets(
   g: Graphics,
   w: number,
@@ -204,13 +236,13 @@ export function drawLevelUpHeaderFx(g: Graphics, cx: number, y: number, w: numbe
   g.star(cx, y - 28, 4, 5, 2).fill({ color: UI.cardSelectedGlow, alpha: 0.35 });
 }
 
-function upgradeAccent(id: UpgradeId): number {
-  return UPGRADE_ACCENT[id] ?? 0x888899;
+function upgradeAccent(id: StatIconId): number {
+  return statIconAccent(id);
 }
 
 export function drawUpgradeIcon(
   g: Graphics,
-  id: UpgradeId,
+  id: StatIconId,
   cx: number,
   cy: number,
 ): void {
@@ -316,6 +348,59 @@ export function drawUpgradeIcon(
       g.circle(cx, cy, 10).fill({ color: 0x55dd77, alpha: 0.35 });
       g.rect(x + 13, y + 7, 6, 14).fill(0x55dd77);
       g.rect(x + 9, y + 11, 14, 6).fill(0x88ffaa);
+      break;
+    case "class_mage_q":
+      g.circle(cx, cy, 13).stroke({ width: 2, color: 0xff6622, alpha: 0.55 });
+      g.circle(cx, cy, 8).fill({ color: 0xff6644, alpha: 0.5 });
+      g.circle(cx, cy, 4).fill(0xffaa66);
+      for (let i = 0; i < 6; i++) {
+        const a = (i / 6) * Math.PI * 2;
+        g.moveTo(cx, cy)
+          .lineTo(cx + Math.cos(a) * 14, cy + Math.sin(a) * 14)
+          .stroke({ width: 2, color: 0xff8844, alpha: 0.6 });
+      }
+      break;
+    case "class_mage_r":
+      g.moveTo(cx - 4, cy - 10).lineTo(cx + 2, cy).lineTo(cx - 2, cy).lineTo(cx + 4, cy + 10).fill(0x66ccff);
+      g.circle(cx, cy - 8, 3).fill({ color: 0xffffff, alpha: 0.45 });
+      break;
+    case "class_knight_q":
+      g.moveTo(cx, y + 5).lineTo(x + 24, y + 13).lineTo(x + 20, y + 27).lineTo(x + 12, y + 27).lineTo(x + 8, y + 13).closePath().fill(0x667788);
+      g.moveTo(cx + 8, cy).lineTo(x + 26, cy).stroke({ width: 3, color: 0x88aacc });
+      g.moveTo(x + 22, cy - 4).lineTo(x + 27, cy).lineTo(x + 22, cy + 4).fill(0xccddff);
+      break;
+    case "class_knight_r":
+      for (let i = 0; i < 4; i++) {
+        const a = (i / 4) * Math.PI * 2 + 0.4;
+        g.arc(cx, cy, 12, a - 0.35, a + 0.35).stroke({ width: 3, color: 0xddddff, alpha: 0.85 });
+      }
+      break;
+    case "class_rogue_q":
+      for (let i = 0; i < 4; i++) {
+        const a = i * 1.5;
+        g.circle(cx + Math.cos(a) * 6, cy + Math.sin(a) * 4, 7).fill({ color: 0x667766, alpha: 0.35 });
+      }
+      g.circle(cx, cy, 5).fill({ color: 0x445544, alpha: 0.5 });
+      break;
+    case "class_rogue_r":
+      for (let i = 0; i < 8; i++) {
+        const a = (i / 8) * Math.PI * 2;
+        g.moveTo(cx, cy)
+          .lineTo(cx + Math.cos(a) * 14, cy + Math.sin(a) * 14)
+          .stroke({ width: 2, color: 0x44ff88, alpha: 0.75 });
+      }
+      g.circle(cx, cy, 3).fill(0xeeffcc);
+      break;
+    case "class_archer_q":
+      g.circle(x + 8, y + 16, 4).fill(0x4499dd);
+      g.circle(cx, y + 10, 4).fill(0xffcc44);
+      g.circle(x + 24, y + 16, 4).fill(0x4499dd);
+      g.moveTo(x + 6, y + 22).lineTo(x + 26, y + 22).stroke({ width: 2, color: 0x886644 });
+      break;
+    case "class_archer_r":
+      g.circle(cx, cy + 6, 7).stroke({ width: 2, color: 0xff8844, alpha: 0.7 });
+      g.moveTo(cx, cy - 12).lineTo(cx, cy + 2).stroke({ width: 3, color: 0xffcc88, alpha: 0.8 });
+      g.moveTo(cx - 3, cy - 10).lineTo(cx + 3, cy - 10).lineTo(cx, cy - 6).fill(0xff8844);
       break;
     default:
       g.rect(x + 6, y + 6, 20, 20).fill(0x888899);

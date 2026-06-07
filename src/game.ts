@@ -34,11 +34,22 @@ import {
   drawProjectileBody,
   paintTransientFx,
   spawnBoltFx,
+  spawnFlurryFx,
+  spawnHealAuraFx,
   spawnHitBurst,
+  spawnMeteorFx,
   spawnMuzzleFlash,
-  spawnRingFx,
+  spawnNovaFx,
+  spawnRainMarkerFx,
+  spawnShockwaveFx,
+  spawnSmokeFx,
+  spawnWhirlFx,
   type TransientFx,
 } from "./attackFx";
+import {
+  buildStatisticsPanel,
+  STATS_SCROLL_MAX,
+} from "./uiStatistics";
 import {
   getOrbiterConfig,
   OrbiterSystem,
@@ -64,6 +75,7 @@ type Phase =
   | "paused"
   | "gameOver"
   | "shop"
+  | "statistics"
   | "help";
 
 interface Enemy {
@@ -158,6 +170,7 @@ export async function startGame(app: Application) {
   let phase: Phase = "mainMenu";
   let charFocus = 0;
   let menuFocus = 0;
+  let statsScroll = 0;
   let shopFocus = 0;
   let pauseMenuFocus = 0;
   let activeCharacterId: CharacterId = "mage";
@@ -274,24 +287,27 @@ export async function startGame(app: Application) {
     return skills;
   }
 
-  function castMeteorShower() {
+  function castMeteorShower(): boolean {
     const level = skillLv("skill_meteor");
-    if (level <= 0) return;
-    const active = enemies.filter((e) => e.spawnTimer <= 0);
-    if (active.length === 0) return;
+    if (level <= 0) return false;
+    const active = enemies.filter(
+      (e) => isEnemyActive(e) && dist(playerX, playerY, e.x, e.y) <= 450,
+    );
+    if (active.length === 0) return false;
 
     for (let i = 0; i < level; i++) {
       const e = active[Math.floor(Math.random() * active.length)];
-      addTransientFx(spawnRingFx(e.x, e.y, 28, 0xff6622, 0.22));
+      addTransientFx(spawnMeteorFx(e.x, e.y));
       damageEnemy(e, 32 * stats.damageMult);
     }
+    return true;
   }
 
-  function castThunderStrike() {
+  function castThunderStrike(): boolean {
     const level = skillLv("skill_thunder");
-    if (level <= 0) return;
+    if (level <= 0) return false;
     const target = findNearestEnemy(420);
-    if (!target) return;
+    if (!target) return false;
 
     const dmg = (28 + level * 8) * stats.damageMult;
     addTransientFx(spawnBoltFx(playerX, playerY, target.x, target.y, 0x66ccff));
@@ -301,31 +317,35 @@ export async function startGame(app: Application) {
       let cx = target.x;
       let cy = target.y;
       const next = enemies
-        .filter((e) => e !== target && e.spawnTimer <= 0 && dist(cx, cy, e.x, e.y) < 140)
+        .filter((e) => e !== target && isEnemyActive(e) && dist(cx, cy, e.x, e.y) < 140)
         .sort((a, b) => dist(cx, cy, a.x, a.y) - dist(cx, cy, b.x, b.y))[0];
       if (next) {
         addTransientFx(spawnBoltFx(cx, cy, next.x, next.y, 0xaaddff));
         damageEnemy(next, dmg * 0.65);
       }
     }
+    return true;
   }
 
-  function castHealingAura() {
+  function castHealingAura(): boolean {
     const level = skillLv("skill_heal");
-    if (level <= 0) return;
+    if (level <= 0) return false;
     const heal = 8 + level * 4;
     const actual = Math.min(heal, stats.maxHp - playerHp);
     playerHp = Math.min(stats.maxHp, playerHp + heal);
     if (actual > 0) {
       spawnFloatingNumber(playerX, playerY - 28, actual, "heal");
     }
-    addTransientFx(spawnRingFx(playerX, playerY, 55 + level * 8, 0x55dd77, 0.3));
+    addTransientFx(
+      spawnHealAuraFx(playerX, playerY, 55 + level * 8),
+    );
+    return true;
   }
 
   function useBonusSkills() {
     const casts: {
       id: Exclude<SkillUpgradeId, "skill_orbit">;
-      fn: () => void;
+      fn: () => boolean;
     }[] = [
       { id: "skill_meteor", fn: castMeteorShower },
       { id: "skill_thunder", fn: castThunderStrike },
@@ -336,8 +356,9 @@ export async function startGame(app: Application) {
       if (skillLv(id) <= 0) continue;
       const cd = bonusSkillCooldowns[id] ?? 0;
       if (cd > 0) continue;
-      fn();
-      bonusSkillCooldowns[id] = SKILL_COOLDOWNS[id] * stats.cooldownMult;
+      if (fn()) {
+        bonusSkillCooldowns[id] = SKILL_COOLDOWNS[id] * stats.cooldownMult;
+      }
     }
   }
 
@@ -558,10 +579,15 @@ export async function startGame(app: Application) {
     });
   }
 
+  function isEnemyActive(e: Enemy): boolean {
+    return e.spawnTimer <= 0;
+  }
+
   function findNearestEnemy(maxRange = Infinity): Enemy | null {
     let best: Enemy | null = null;
     let bestD = maxRange;
     for (const e of enemies) {
+      if (!isEnemyActive(e)) continue;
       const d = dist(playerX, playerY, e.x, e.y);
       if (d < bestD) {
         bestD = d;
@@ -569,6 +595,10 @@ export async function startGame(app: Application) {
       }
     }
     return best;
+  }
+
+  function hasEnemyInRange(range: number): boolean {
+    return findNearestEnemy(range) !== null;
   }
 
   function spawnFloatingNumber(
@@ -722,9 +752,10 @@ export async function startGame(app: Application) {
     return { amount: base * (crit ? 2 : 1), crit };
   }
 
-  function autoAttack() {
-    const target = findNearestEnemy(stats.areaMult * character.range);
-    if (!target) return;
+  function autoAttack(): boolean {
+    const attackRange = stats.areaMult * character.range;
+    const target = findNearestEnemy(attackRange);
+    if (!target) return false;
 
     const baseDmg = character.damage * stats.damageMult;
     const angle = Math.atan2(target.y - playerY, target.x - playerX);
@@ -754,6 +785,7 @@ export async function startGame(app: Application) {
         spawnMuzzleFlash(playerX, playerY, angle, character.accent, "melee"),
       );
       for (const e of enemies) {
+        if (!isEnemyActive(e)) continue;
         const d = dist(playerX, playerY, e.x, e.y);
         if (d <= character.range * stats.areaMult) {
           const aToEnemy = Math.atan2(e.y - playerY, e.x - playerX);
@@ -762,7 +794,7 @@ export async function startGame(app: Application) {
           if (diff < 1.2) damageEnemy(e, amount, crit);
         }
       }
-      return;
+      return true;
     }
 
     for (let i = 0; i < count; i++) {
@@ -793,22 +825,54 @@ export async function startGame(app: Application) {
         addTransientFx(spawnMuzzleFlash(playerX, playerY, a, color, character.attackKind));
       }
     }
+    return true;
+  }
+
+  function canCastSkillQ(): boolean {
+    switch (character.id) {
+      case "mage":
+        return hasEnemyInRange(160 * stats.areaMult);
+      case "knight":
+        return hasEnemyInRange(100);
+      case "rogue":
+        return true;
+      case "archer":
+        return hasEnemyInRange(400);
+      default:
+        return false;
+    }
+  }
+
+  function canCastSkillR(): boolean {
+    switch (character.id) {
+      case "mage":
+        return hasEnemyInRange(500);
+      case "knight":
+        return hasEnemyInRange(110 * stats.areaMult);
+      case "rogue":
+        return hasEnemyInRange(320);
+      case "archer":
+        return hasEnemyInRange(280);
+      default:
+        return false;
+    }
   }
 
   function useSkillQ() {
     if (skillQCooldown > 0) return;
+    if (!canCastSkillQ()) return;
     skillQCooldown = character.skillQ.cooldown * stats.cooldownMult;
 
     switch (character.id) {
       case "mage": {
+        const novaR = 160 * stats.areaMult;
+        addTransientFx(spawnNovaFx(playerX, playerY, novaR, 0xff6622));
         for (const e of [...enemies]) {
-          if (dist(playerX, playerY, e.x, e.y) < 160 * stats.areaMult) {
+          if (!isEnemyActive(e)) continue;
+          if (dist(playerX, playerY, e.x, e.y) < novaR) {
             damageEnemy(e, 45 * stats.damageMult);
           }
         }
-        addTransientFx(
-          spawnRingFx(playerX, playerY, 160 * stats.areaMult, 0xff6622, 0.32),
-        );
         break;
       }
       case "knight": {
@@ -817,8 +881,10 @@ export async function startGame(app: Application) {
           ? Math.atan2(target.y - playerY, target.x - playerX)
           : 0;
         triggerAttackSwing(angle);
+        addTransientFx(spawnShockwaveFx(playerX, playerY, angle, 100, 0x88aacc));
         addTransientFx(spawnMuzzleFlash(playerX, playerY, angle, 0x88aacc, "melee"));
         for (const e of enemies) {
+          if (!isEnemyActive(e)) continue;
           const d = dist(playerX, playerY, e.x, e.y);
           if (d < 100) {
             const a = Math.atan2(e.y - playerY, e.x - playerX);
@@ -832,6 +898,7 @@ export async function startGame(app: Application) {
       case "rogue":
         smokeTimer = 2.5;
         invincible = Math.max(invincible, 2.5);
+        addTransientFx(spawnSmokeFx(playerX, playerY));
         break;
       case "archer": {
         const target = findNearestEnemy(400);
@@ -854,6 +921,8 @@ export async function startGame(app: Application) {
             crit: false,
           });
         }
+        triggerAttackSwing(angle);
+        addTransientFx(spawnNovaFx(playerX, playerY, 48, 0xffcc44, 0.28));
         addTransientFx(spawnMuzzleFlash(playerX, playerY, angle, 0xffcc44, "arrow"));
         break;
       }
@@ -862,6 +931,7 @@ export async function startGame(app: Application) {
 
   function useSkillR() {
     if (skillRCooldown > 0) return;
+    if (!canCastSkillR()) return;
     skillRCooldown = character.skillR.cooldown * stats.cooldownMult;
 
     switch (character.id) {
@@ -869,32 +939,40 @@ export async function startGame(app: Application) {
         let remaining = 5;
         let from = findNearestEnemy(500);
         if (!from) break;
-        let cx = from.x;
-        let cy = from.y;
-        damageEnemy(from, 40 * stats.damageMult);
+        let cx = playerX;
+        let cy = playerY;
+        addTransientFx(spawnBoltFx(cx, cy, from.x, from.y, 0x66ccff));
+        damageEnemy(from, 26 * stats.damageMult);
         remaining--;
+        cx = from.x;
+        cy = from.y;
         while (remaining > 0) {
           const next = enemies
-            .filter((e) => dist(cx, cy, e.x, e.y) < 180)
+            .filter((e) => isEnemyActive(e) && dist(cx, cy, e.x, e.y) < 180)
             .sort((a, b) => dist(cx, cy, a.x, a.y) - dist(cx, cy, b.x, b.y))[0];
           if (!next) break;
           addTransientFx(spawnBoltFx(cx, cy, next.x, next.y, 0x66ccff));
-          damageEnemy(next, 30 * stats.damageMult);
+          damageEnemy(next, 18 * stats.damageMult);
           cx = next.x;
           cy = next.y;
           remaining--;
         }
         break;
       }
-      case "knight":
-        addTransientFx(spawnRingFx(playerX, playerY, 110 * stats.areaMult, 0xddddff, 0.26));
+      case "knight": {
+        const whirlR = 110 * stats.areaMult;
+        addTransientFx(spawnWhirlFx(playerX, playerY, whirlR, 0xddddff));
         for (const e of [...enemies]) {
-          if (dist(playerX, playerY, e.x, e.y) < 110 * stats.areaMult) {
+          if (!isEnemyActive(e)) continue;
+          if (dist(playerX, playerY, e.x, e.y) < whirlR) {
             damageEnemy(e, 28 * stats.damageMult);
           }
         }
         break;
+      }
       case "rogue":
+        addTransientFx(spawnFlurryFx(playerX, playerY, 0x44ff88));
+        triggerAttackSwing(0);
         for (let i = 0; i < 12; i++) {
           const a = (i / 12) * Math.PI * 2;
           addProjectile({
@@ -914,7 +992,9 @@ export async function startGame(app: Application) {
         break;
       case "archer":
         for (const e of [...enemies]) {
+          if (!isEnemyActive(e)) continue;
           if (dist(playerX, playerY, e.x, e.y) < 280) {
+            addTransientFx(spawnRainMarkerFx(e.x, e.y));
             addProjectile({
               x: e.x,
               y: e.y - 200,
@@ -1119,8 +1199,11 @@ export async function startGame(app: Application) {
 
     attackTimer -= dt;
     if (attackTimer <= 0) {
-      autoAttack();
-      attackTimer = 1 / (character.attackRate * stats.attackRateMult);
+      if (autoAttack()) {
+        attackTimer = 1 / (character.attackRate * stats.attackRateMult);
+      } else {
+        attackTimer = 0.12;
+      }
     }
 
     spawnTimer -= dt;
@@ -1220,6 +1303,7 @@ export async function startGame(app: Application) {
       let hit = false;
       for (let j = enemies.length - 1; j >= 0; j--) {
         const e = enemies[j];
+        if (!isEnemyActive(e)) continue;
         if (dist(p.x, p.y, e.x, e.y) < e.radius + p.radius) {
           damageEnemy(e, p.damage, p.crit);
           if (p.pierceLeft > 0) {
@@ -1352,6 +1436,13 @@ export async function startGame(app: Application) {
       overlay.addChild(buildMainMenu(w, h));
     } else if (phase === "characterSelect") {
       overlay.addChild(buildCharacterSelect(w, h));
+    } else if (phase === "statistics") {
+      overlay.addChild(
+        buildStatisticsPanel(w, h, statsScroll, () => {
+          phase = "mainMenu";
+          layoutOverlay();
+        }),
+      );
     } else if (phase === "help") {
       overlay.addChild(buildHelp(w, h));
     } else if (phase === "shop") {
@@ -1418,7 +1509,7 @@ export async function startGame(app: Application) {
     title.anchor.set(0.5);
     title.position.set(w / 2, h * 0.18);
 
-    const items = ["NEW GAME", "SHOP", "HOW TO PLAY"];
+    const items = ["NEW GAME", "SHOP", "STATISTICS", "HOW TO PLAY"];
     const actions = [
       () => {
         phase = "characterSelect";
@@ -1427,6 +1518,11 @@ export async function startGame(app: Application) {
       () => {
         phase = "shop";
         shopFocus = 0;
+        layoutOverlay();
+      },
+      () => {
+        statsScroll = 0;
+        phase = "statistics";
         layoutOverlay();
       },
       () => {
@@ -1703,11 +1799,11 @@ export async function startGame(app: Application) {
   function handleMenuInput() {
     if (phase === "mainMenu") {
       if (input.pressed("ArrowUp") || input.pressed("KeyW")) {
-        menuFocus = (menuFocus + 2) % 3;
+        menuFocus = (menuFocus + 3) % 4;
         layoutOverlay();
       }
       if (input.pressed("ArrowDown") || input.pressed("KeyS")) {
-        menuFocus = (menuFocus + 1) % 3;
+        menuFocus = (menuFocus + 1) % 4;
         layoutOverlay();
       }
       if (input.pressed("Enter") || input.pressed("Space")) {
@@ -1715,7 +1811,23 @@ export async function startGame(app: Application) {
         else if (menuFocus === 1) {
           phase = "shop";
           shopFocus = 0;
+        } else if (menuFocus === 2) {
+          statsScroll = 0;
+          phase = "statistics";
         } else phase = "help";
+        layoutOverlay();
+      }
+    } else if (phase === "statistics") {
+      if (input.pressed("ArrowUp") || input.pressed("KeyW")) {
+        statsScroll = Math.max(0, statsScroll - 1);
+        layoutOverlay();
+      }
+      if (input.pressed("ArrowDown") || input.pressed("KeyS")) {
+        statsScroll = Math.min(STATS_SCROLL_MAX, statsScroll + 1);
+        layoutOverlay();
+      }
+      if (input.pressed("Escape")) {
+        phase = "mainMenu";
         layoutOverlay();
       }
     } else if (phase === "characterSelect") {
