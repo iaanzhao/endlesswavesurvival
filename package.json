@@ -1,0 +1,20 @@
+{
+  "name": "endlesswavesurvival",
+  "version": "1.0.0",
+  "description": "Endless Waves Survival — faithful browser clone",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "start": "npm run dev",
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "pixi.js": "^8.8.1"
+  },
+  "devDependencies": {
+    "typescript": "~5.7.3",
+    "vite": "^6.2.0"
+  }
+}
