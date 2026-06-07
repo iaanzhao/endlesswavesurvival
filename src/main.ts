@@ -1,10 +1,11 @@
 import { Application } from "pixi.js";
 import { startGame } from "./game";
+import { UI } from "./uiTheme";
 
 async function main() {
   const app = new Application();
   await app.init({
-    background: 0x0a0e14,
+    background: UI.bg,
     resizeTo: window,
     antialias: false,
     resolution: window.devicePixelRatio || 1,

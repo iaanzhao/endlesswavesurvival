@@ -1,11 +1,8 @@
 import {
   Application,
-  Assets,
   Container,
   Graphics,
-  Sprite,
   Text,
-  Texture,
   type Ticker,
 } from "pixi.js";
 import {
@@ -25,7 +22,22 @@ import {
   type EnemyKind,
   type UpgradeId,
 } from "./data";
-import { Input, dist, formatTime, loadSave, pickRandom, saveGame } from "./util";
+import { Input, dist, formatTime, loadSave, pickRandom, saveGame, setClickHitArea } from "./util";
+import { createGameHud } from "./uiHud";
+import { createLevelUpPanel } from "./uiLevelUp";
+import { drawMenuButtonBg, drawPanelFrame } from "./uiDraw";
+import { bodyStyle, FONT, menuTitleStyle, titleStyle, UI } from "./uiTheme";
+import { createMenuBackdrop } from "./menuBackdrop";
+import {
+  createEnemyGraphic,
+  getEnemyHealthBarWidth,
+  getEnemySpawnDuration,
+  getEnemyWobbleRate,
+  getSpawnAnimation,
+  loadEnemyAssets,
+  updateEnemyAnimation,
+  updateEnemyHealthBar,
+} from "./enemies";
 
 type Phase =
   | "mainMenu"
@@ -48,11 +60,12 @@ interface Enemy {
   damage: number;
   xp: number;
   gold: number;
-  sprite: Sprite;
+  container: Container;
+  healthBar: Graphics;
   hitFlash: number;
-  wobble: number;
+  wobblePhase: number;
   spawnTimer: number;
-  baseScale: number;
+  showHealthBar: boolean;
 }
 
 type FloatKind = "damage" | "crit" | "xp" | "gold" | "heal" | "hurt";
@@ -103,59 +116,9 @@ const DASH_COOLDOWN = 1.0;
 const DASH_SPEED = 420;
 const DASH_IFRAMES = 0.22;
 
-function enemyAssetPath(kind: EnemyKind): string {
-  const files: Record<EnemyKind, string> = {
-    ghost: "ghost",
-    skeleton: "skeleton",
-    slimeSmall: "slime-small",
-    slimeMedium: "slime-small",
-    slimeBig: "slime-medium",
-    skull: "skull",
-    bat: "bat",
-    brute: "brute",
-  };
-  return `/assets/enemies/${files[kind]}.png`;
-}
-
-function getSpawnDuration(kind: EnemyKind): number {
-  if (kind === "brute") return 0.72;
-  if (kind === "slimeBig") return 0.58;
-  if (kind === "bat") return 0.38;
-  return 0.46;
-}
-
-function easeOutBack(t: number): number {
-  const c1 = 1.70158;
-  const c3 = c1 + 1;
-  return 1 + c3 * (t - 1) ** 3 + c1 * (t - 1) ** 2;
-}
-
-function easeOutCubic(t: number): number {
-  return 1 - (1 - t) ** 3;
-}
-
-function getEnemySpawnOffset(kind: EnemyKind, progress: number, radius: number): number {
-  const lift = 1 - easeOutCubic(progress);
-  switch (kind) {
-    case "slimeSmall":
-    case "slimeMedium":
-    case "slimeBig":
-      return -lift * radius * 1.8;
-    case "ghost":
-    case "bat":
-      return -lift * radius * 1.4;
-    case "skeleton":
-      return lift * radius * 0.9;
-    case "skull":
-      return -lift * radius * 0.7;
-    case "brute":
-      return -lift * radius * 2.2;
-    default:
-      return -lift * radius;
-  }
-}
-
 export async function startGame(app: Application) {
+  await loadEnemyAssets();
+
   const input = new Input();
   let save = loadSave();
 
@@ -167,27 +130,6 @@ export async function startGame(app: Application) {
   const vignette = new Graphics();
   const ui = new Container();
   root.addChild(world, ui);
-
-  const enemyTextures: Partial<Record<EnemyKind, Texture>> = {};
-  await Promise.all(
-    (
-      [
-        "ghost",
-        "skeleton",
-        "slimeSmall",
-        "slimeMedium",
-        "slimeBig",
-        "skull",
-        "bat",
-        "brute",
-      ] as EnemyKind[]
-    ).map(async (kind) => {
-      const path = enemyAssetPath(kind);
-      const tex = await Assets.load(path);
-      tex.source.scaleMode = "nearest";
-      enemyTextures[kind] = tex;
-    }),
-  );
 
   let phase: Phase = "mainMenu";
   let charFocus = 0;
@@ -241,7 +183,8 @@ export async function startGame(app: Application) {
   const pickupLayer = new Container();
   world.addChild(floor, enemyLayer, pickupLayer, fxLayer, playerGfx);
 
-  const hud = buildHud(ui);
+  const hud = createGameHud();
+  ui.addChild(hud.root);
   const overlay = new Container();
   ui.addChild(overlay);
 
@@ -342,7 +285,7 @@ export async function startGame(app: Application) {
   }
 
   function clearEntities() {
-    for (const e of enemies) e.sprite.destroy();
+    for (const e of enemies) e.container.destroy();
     enemies.length = 0;
     for (const p of projectiles) p.gfx.destroy();
     projectiles.length = 0;
@@ -383,20 +326,14 @@ export async function startGame(app: Application) {
 
   function addEnemy(kind: EnemyKind) {
     const pos = spawnFromEdge();
-    const tex = enemyTextures[kind];
-    if (!tex) return;
-
     const base = ENEMY_DEFS[kind];
     const maxHp = base.hp + waveEnemyHpBonus(wave, kind);
-    const sprite = new Sprite(tex);
-    sprite.anchor.set(0.5);
-    sprite.tint = base.tint;
-    const scale = (base.radius * 2.2) / Math.max(sprite.width, sprite.height);
-    const baseScale = kind === "slimeMedium" ? scale * 1.15 : scale;
-    sprite.scale.set(baseScale * 0.08);
-    sprite.alpha = 0;
-    sprite.position.set(pos.x, pos.y);
-    enemyLayer.addChild(sprite);
+    const { container, healthBar } = createEnemyGraphic(kind);
+    container.position.set(pos.x, pos.y);
+    const barW = getEnemyHealthBarWidth(kind);
+    const showHealthBar = kind === "brute";
+    updateEnemyHealthBar(healthBar, maxHp, maxHp, barW, kind, showHealthBar, 0);
+    enemyLayer.addChild(container);
     spawnEnemyRing(pos.x, pos.y, base.radius, base.tint);
 
     enemies.push({
@@ -410,11 +347,12 @@ export async function startGame(app: Application) {
       damage: base.damage + Math.floor(wave / 8),
       xp: base.xp,
       gold: base.gold,
-      sprite,
+      container,
+      healthBar,
       hitFlash: 0,
-      wobble: Math.random() * Math.PI * 2,
-      spawnTimer: getSpawnDuration(kind),
-      baseScale,
+      wobblePhase: Math.random() * Math.PI * 2,
+      spawnTimer: getEnemySpawnDuration(kind),
+      showHealthBar,
     });
   }
 
@@ -495,6 +433,7 @@ export async function startGame(app: Application) {
   function damageEnemy(e: Enemy, amount: number, crit = false) {
     e.hp -= amount;
     e.hitFlash = 0.12;
+    e.showHealthBar = true;
     spawnFloatingNumber(e.x, e.y, amount, crit ? "crit" : "damage");
     if (e.hp <= 0) killEnemy(e);
   }
@@ -509,7 +448,7 @@ export async function startGame(app: Application) {
     if (Math.random() < 0.35 + e.gold * 0.05) {
       spawnPickup(e.x + 8, e.y, "gold", e.gold);
     }
-    e.sprite.destroy();
+    e.container.destroy();
     enemies.splice(idx, 1);
   }
 
@@ -930,39 +869,51 @@ export async function startGame(app: Application) {
     }
 
     for (const e of enemies) {
-      if (e.spawnTimer > 0) {
-        e.spawnTimer -= dt;
-        const duration = getSpawnDuration(e.kind);
-        const progress = 1 - Math.max(0, e.spawnTimer) / duration;
-        const pop = easeOutBack(Math.min(1, progress));
-        const offsetY = getEnemySpawnOffset(e.kind, progress, e.radius);
-        e.sprite.scale.set(e.baseScale * (0.08 + pop * 0.92));
-        e.sprite.alpha = Math.min(1, progress * 1.35);
-        e.wobble += dt * 4;
-        e.sprite.position.set(
-          e.x + Math.sin(e.wobble) * 2,
-          e.y + offsetY + Math.cos(e.wobble * 0.7) * 2,
-        );
-        continue;
-      }
-
       const dx = playerX - e.x;
       const dy = playerY - e.y;
-      const d = Math.hypot(dx, dy) || 1;
-      e.x += (dx / d) * e.speed * dt;
-      e.y += (dy / d) * e.speed * dt;
-      e.wobble += dt * 4;
-      e.sprite.position.set(
-        e.x + Math.sin(e.wobble) * 2,
-        e.y + Math.cos(e.wobble * 0.7) * 2,
+      const len = Math.hypot(dx, dy) || 1;
+      const moveAngle = Math.atan2(dy, dx);
+      const moving = len > 8 && e.spawnTimer <= 0;
+
+      const spawn =
+        e.spawnTimer > 0 ? getSpawnAnimation(e.kind, e.spawnTimer) : null;
+      const moveScale = spawn ? spawn.progress * spawn.progress : 1;
+
+      e.x += (dx / len) * e.speed * dt * moveScale;
+      e.y += (dy / len) * e.speed * dt * moveScale;
+      if (e.spawnTimer > 0) e.spawnTimer -= dt;
+
+      e.wobblePhase += dt * getEnemyWobbleRate(e.kind);
+      if (e.hitFlash > 0) e.hitFlash -= dt;
+
+      e.container.position.set(e.x, e.y);
+      updateEnemyAnimation(
+        e.kind,
+        e.container,
+        e.wobblePhase,
+        moveAngle,
+        moving,
+        e.hitFlash,
+        e.spawnTimer,
       );
-      if (e.hitFlash > 0) {
-        e.hitFlash -= dt;
-        e.sprite.alpha = 0.5 + Math.sin(e.hitFlash * 40) * 0.3;
-      } else {
-        e.sprite.alpha = 1;
-      }
-      if (dist(playerX, playerY, e.x, e.y) < e.radius + 14) {
+
+      const spawnUi =
+        e.spawnTimer > 0 ? getSpawnAnimation(e.kind, e.spawnTimer) : null;
+      updateEnemyHealthBar(
+        e.healthBar,
+        e.hp,
+        e.maxHp,
+        getEnemyHealthBarWidth(e.kind),
+        e.kind,
+        e.showHealthBar && (!spawnUi || spawnUi.progress > 0.35),
+        e.wobblePhase,
+      );
+      if (spawnUi) e.healthBar.alpha = spawnUi.alpha;
+
+      if (
+        e.spawnTimer <= 0 &&
+        dist(playerX, playerY, e.x, e.y) < e.radius + 14
+      ) {
         damagePlayer(e.damage * dt * 2.5);
       }
     }
@@ -1075,14 +1026,12 @@ export async function startGame(app: Application) {
       wave,
       time: formatTime(gameTime),
       gold: runGold,
-      totalGold: save.totalGold,
       skillQ: skillQCooldown,
       skillR: skillRCooldown,
       skillQName: character.skillQ.name,
       skillRName: character.skillR.name,
       skillQMax: character.skillQ.cooldown * stats.cooldownMult,
       skillRMax: character.skillR.cooldown * stats.cooldownMult,
-      kills,
       visible: phase === "playing" || phase === "levelUp" || phase === "paused",
     });
   }
@@ -1123,15 +1072,18 @@ export async function startGame(app: Application) {
     }
   }
 
+  function drawMenuBackdrop(container: Container, w: number, h: number) {
+    container.addChild(createMenuBackdrop(w, h));
+  }
+
   function panelBg(w: number, h: number, pw: number, ph: number): Container {
     const c = new Container();
     const dim = new Graphics();
-    dim.rect(0, 0, w, h).fill({ color: 0x000000, alpha: 0.55 });
+    dim.rect(0, 0, w, h).fill({ color: UI.overlay, alpha: 0.78 });
     dim.eventMode = "static";
     const box = new Graphics();
-    box.roundRect(-pw / 2, -ph / 2, pw, ph, 8).fill(0x1a2030);
-    box.roundRect(-pw / 2, -ph / 2, pw, ph, 8).stroke({ width: 2, color: 0x445566 });
-    box.position.set(w / 2, h / 2);
+    drawPanelFrame(box, pw, ph);
+    box.position.set(w / 2 - pw / 2, h / 2 - ph / 2);
     c.addChild(dim, box);
     return c;
   }
@@ -1141,47 +1093,41 @@ export async function startGame(app: Application) {
     btn.eventMode = "static";
     btn.cursor = "pointer";
     const g = new Graphics();
-    g.roundRect(-120, -22, 240, 44, 4).fill(focused ? 0x334466 : 0x222838);
-    g.roundRect(-120, -22, 240, 44, 4).stroke({ width: 2, color: focused ? 0x88aacc : 0x445566 });
-    const t = new Text({
+    const text = new Text({
       text: label,
-      style: { fill: 0xffffff, fontSize: 20, fontFamily: "monospace", letterSpacing: 2 },
+      style: {
+        fill: UI.menuText,
+        fontSize: label.length > 8 ? 22 : 28,
+        fontFamily: FONT,
+        letterSpacing: label.length > 8 ? 2 : 3,
+        fontWeight: "bold",
+      },
     });
-    t.anchor.set(0.5);
-    btn.addChild(g, t);
+    text.anchor.set(0.5);
+    const padX = 28;
+    const padY = 16;
+    const btnW = text.width + padX * 2;
+    const btnH = text.height + padY * 2;
+    drawMenuButtonBg(g, btnW, btnH, focused);
+    text.position.set(btnW / 2, btnH / 2);
+    btn.addChild(g, text);
+    setClickHitArea(btn, btnW, btnH);
     btn.on("pointertap", onClick);
     return btn;
   }
 
   function buildMainMenu(w: number, h: number): Container {
     const c = new Container();
-    const bg = new Graphics();
-    bg.rect(0, 0, w, h).fill({ color: 0x0a0e14, alpha: 0.92 });
-    c.addChild(bg);
+    drawMenuBackdrop(c, w, h);
 
     const title = new Text({
       text: "ENDLESS WAVES\nSURVIVAL",
-      style: {
-        fill: 0xffcc44,
-        fontSize: 42,
-        fontFamily: "monospace",
-        fontWeight: "bold",
-        align: "center",
-        lineHeight: 48,
-        letterSpacing: 3,
-      },
+      style: menuTitleStyle,
     });
     title.anchor.set(0.5);
-    title.position.set(w / 2, h * 0.22);
+    title.position.set(w / 2, h * 0.18);
 
-    const sub = new Text({
-      text: "Survive the endless horde. Level up. Stack power.",
-      style: { fill: 0x8899aa, fontSize: 16, fontFamily: "monospace" },
-    });
-    sub.anchor.set(0.5);
-    sub.position.set(w / 2, h * 0.22 + 70);
-
-    const items = ["PLAY", "SHOP", "HOW TO PLAY"];
+    const items = ["NEW GAME", "SHOP", "HOW TO PLAY"];
     const actions = [
       () => {
         phase = "characterSelect";
@@ -1199,28 +1145,28 @@ export async function startGame(app: Application) {
     ];
     items.forEach((label, i) => {
       const btn = menuBtn(label, actions[i], menuFocus === i);
-      btn.position.set(w / 2, h * 0.48 + i * 58);
+      btn.position.set(w / 2 - 140, h * 0.42 + i * 72);
       c.addChild(btn);
     });
 
     const stats = new Text({
-      text: `Gold: ${save.totalGold}  |  Best: ${save.highScore} kills  |  ${formatTime(save.bestTime)}`,
-      style: { fill: 0x667788, fontSize: 14, fontFamily: "monospace" },
+      text: `Gold ${save.totalGold}   Best ${save.highScore} kills   ${formatTime(save.bestTime)}`,
+      style: { fill: UI.textDim, fontSize: 13, fontFamily: FONT },
     });
     stats.anchor.set(0.5);
-    stats.position.set(w / 2, h - 40);
-    c.addChild(title, sub, stats);
+    stats.position.set(w / 2, h - 36);
+    c.addChild(title, stats);
     return c;
   }
 
   function buildCharacterSelect(w: number, h: number): Container {
-    const c = panelBg(w, h, 720, 480);
+    const c = panelBg(w, h, 760, 500);
     const title = new Text({
-      text: "CHOOSE YOUR HERO",
-      style: { fill: 0xffcc44, fontSize: 26, fontFamily: "monospace", letterSpacing: 2 },
+      text: "Choose your hero",
+      style: titleStyle,
     });
     title.anchor.set(0.5);
-    title.position.set(w / 2, h / 2 - 200);
+    title.position.set(w / 2, h / 2 - 210);
     c.addChild(title);
 
     CHARACTERS.forEach((ch, i) => {
@@ -1229,25 +1175,35 @@ export async function startGame(app: Application) {
       card.cursor = "pointer";
       const focused = charFocus === i;
       const g = new Graphics();
-      g.roundRect(-80, -90, 160, 180, 6).fill(focused ? 0x283040 : 0x1a2030);
-      g.roundRect(-80, -90, 160, 180, 6).stroke({ width: 2, color: focused ? ch.accent : 0x445566 });
+      drawPanelFrame(g, 168, 196);
+      if (focused) {
+        g.rect(0, 0, 168, 196).stroke({ width: 4, color: UI.cardSelected });
+      }
       const preview = new Graphics();
-      preview.circle(0, -20, 14).fill(ch.accent);
-      preview.roundRect(-10, -5, 20, 22, 2).fill(ch.color);
+      preview.circle(84, 58, 18).fill(ch.accent);
+      preview.roundRect(74, 72, 20, 26, 2).fill(ch.color);
       const name = new Text({
         text: ch.name,
-        style: { fill: 0xffffff, fontSize: 16, fontFamily: "monospace", fontWeight: "bold" },
+        style: { fill: UI.textPrimary, fontSize: 15, fontFamily: FONT, fontWeight: "bold" },
       });
       name.anchor.set(0.5);
-      name.y = 30;
+      name.position.set(84, 118);
       const tag = new Text({
         text: ch.tagline,
-        style: { fill: 0x8899aa, fontSize: 11, fontFamily: "monospace", wordWrap: true, wordWrapWidth: 140, align: "center" },
+        style: {
+          fill: UI.textMuted,
+          fontSize: 11,
+          fontFamily: FONT,
+          wordWrap: true,
+          wordWrapWidth: 140,
+          align: "center",
+        },
       });
       tag.anchor.set(0.5);
-      tag.y = 55;
+      tag.position.set(84, 152);
       card.addChild(g, preview, name, tag);
-      card.position.set(w / 2 - 240 + i * 160, h / 2 - 10);
+      setClickHitArea(card, 168, 196);
+      card.position.set(w / 2 - 252 + i * 168, h / 2 - 70);
       card.on("pointertap", () => {
         resetRun(ch.id);
         phase = "playing";
@@ -1260,7 +1216,7 @@ export async function startGame(app: Application) {
       phase = "mainMenu";
       layoutOverlay();
     });
-    back.position.set(w / 2, h / 2 + 170);
+    back.position.set(w / 2 - 140, h / 2 + 180);
     c.addChild(back);
     return c;
   }
@@ -1279,13 +1235,7 @@ export async function startGame(app: Application) {
         "All upgrades stack — build the strongest combo!\n\n" +
         "Mage — area magic  |  Knight — melee tank\n" +
         "Rogue — speed & crit  |  Archer — ranged kiting",
-      style: {
-        fill: 0xccddee,
-        fontSize: 15,
-        fontFamily: "monospace",
-        align: "center",
-        lineHeight: 24,
-      },
+      style: bodyStyle,
     });
     text.anchor.set(0.5);
     text.position.set(w / 2, h / 2 - 20);
@@ -1294,7 +1244,7 @@ export async function startGame(app: Application) {
       phase = "mainMenu";
       layoutOverlay();
     });
-    back.position.set(w / 2, h / 2 + 180);
+    back.position.set(w / 2 - 140, h / 2 + 180);
     c.addChild(back);
     return c;
   }
@@ -1302,12 +1252,24 @@ export async function startGame(app: Application) {
   function buildShopPanel(w: number, h: number): Container {
     const c = panelBg(w, h, 640, 500);
     const title = new Text({
-      text: `SHOP — ${save.totalGold} gold`,
-      style: { fill: 0xffcc44, fontSize: 24, fontFamily: "monospace" },
+      text: "Shop",
+      style: titleStyle,
     });
     title.anchor.set(0.5);
     title.position.set(w / 2, h / 2 - 210);
-    c.addChild(title);
+    const coinLabel = new Text({
+      text: `Your gold: ${save.totalGold}`,
+      style: {
+        fill: UI.coin,
+        fontSize: 18,
+        fontFamily: FONT,
+        fontWeight: "bold",
+        stroke: { color: 0x000000, width: 3 },
+      },
+    });
+    coinLabel.anchor.set(0.5);
+    coinLabel.position.set(w / 2, h / 2 - 175);
+    c.addChild(title, coinLabel);
 
     SHOP_ITEMS.forEach((item, i) => {
       const unlocked = save.unlockedShop[item.id];
@@ -1316,19 +1278,26 @@ export async function startGame(app: Application) {
       const row = new Container();
       const focused = shopFocus === i;
       const g = new Graphics();
-      g.roundRect(-280, -22, 560, 44, 4).fill(focused ? 0x283040 : 0x1a2030);
-      g.roundRect(-280, -22, 560, 44, 4).stroke({ width: 1, color: focused ? 0x88aacc : 0x334455 });
+      drawPanelFrame(g, 560, 40);
+      if (focused) {
+        g.rect(0, 0, 560, 40).stroke({ width: 3, color: UI.cardSelected });
+      }
       const label = unlocked
         ? `${item.name} — ${item.desc}  [${owned ? (active ? "ON" : "OFF") : `${item.cost}g`}]`
         : `${item.name} — locked (collect ${item.unlockGold} lifetime gold)`;
       const t = new Text({
         text: label,
-        style: { fill: unlocked ? 0xccddee : 0x556677, fontSize: 13, fontFamily: "monospace" },
+        style: {
+          fill: unlocked ? UI.textPrimary : UI.textDim,
+          fontSize: 13,
+          fontFamily: FONT,
+        },
       });
       t.anchor.set(0, 0.5);
-      t.x = -260;
+      t.position.set(12, 20);
       row.addChild(g, t);
-      row.position.set(w / 2, h / 2 - 140 + i * 52);
+      setClickHitArea(row, 560, 40);
+      row.position.set(w / 2 - 280, h / 2 - 140 + i * 52);
       row.eventMode = "static";
       row.cursor = unlocked ? "pointer" : "default";
       row.on("pointertap", () => {
@@ -1353,7 +1322,7 @@ export async function startGame(app: Application) {
       phase = "mainMenu";
       layoutOverlay();
     });
-    back.position.set(w / 2, h / 2 + 210);
+    back.position.set(w / 2 - 140, h / 2 + 210);
     c.addChild(back);
     return c;
   }
@@ -1361,8 +1330,8 @@ export async function startGame(app: Application) {
   function buildPauseMenu(w: number, h: number): Container {
     const c = panelBg(w, h, 440, 380);
     const title = new Text({
-      text: "PAUSED",
-      style: { fill: 0xffcc44, fontSize: 32, fontFamily: "monospace", fontWeight: "bold", letterSpacing: 3 },
+      text: "Paused",
+      style: titleStyle,
     });
     title.anchor.set(0.5);
     title.position.set(w / 2, h / 2 - 150);
@@ -1372,13 +1341,7 @@ export async function startGame(app: Application) {
       text:
         `${character.name}  ·  Lv ${playerLevel}  ·  Wave ${wave}\n` +
         `${formatTime(gameTime)}  ·  ${kills} kills  ·  ${runGold} gold`,
-      style: {
-        fill: 0x8899aa,
-        fontSize: 14,
-        fontFamily: "monospace",
-        align: "center",
-        lineHeight: 22,
-      },
+      style: bodyStyle,
     });
     stats.anchor.set(0.5);
     stats.position.set(w / 2, h / 2 - 105);
@@ -1391,13 +1354,13 @@ export async function startGame(app: Application) {
     ];
     items.forEach((item, i) => {
       const btn = menuBtn(item.label, item.action, pauseMenuFocus === i);
-      btn.position.set(w / 2, h / 2 - 30 + i * 58);
+      btn.position.set(w / 2 - 140, h / 2 - 30 + i * 72);
       c.addChild(btn);
     });
 
     const hint = new Text({
       text: "↑↓ navigate  ·  Enter select  ·  Esc resume",
-      style: { fill: 0x556677, fontSize: 12, fontFamily: "monospace" },
+      style: { fill: UI.textDim, fontSize: 12, fontFamily: FONT },
     });
     hint.anchor.set(0.5);
     hint.position.set(w / 2, h / 2 + 155);
@@ -1409,8 +1372,8 @@ export async function startGame(app: Application) {
   function buildGameOver(w: number, h: number): Container {
     const c = panelBg(w, h, 520, 360);
     const title = new Text({
-      text: "GAME OVER",
-      style: { fill: 0xff5544, fontSize: 36, fontFamily: "monospace", fontWeight: "bold" },
+      text: "Game Over",
+      style: { ...titleStyle, fill: UI.textRed },
     });
     title.anchor.set(0.5);
     title.position.set(w / 2, h / 2 - 120);
@@ -1420,7 +1383,7 @@ export async function startGame(app: Application) {
         `Kills: ${kills}\n` +
         `Gold earned: ${runGold}\n` +
         `Level reached: ${playerLevel}`,
-      style: { fill: 0xccddee, fontSize: 18, fontFamily: "monospace", align: "center", lineHeight: 28 },
+      style: bodyStyle,
     });
     statsText.anchor.set(0.5);
     statsText.position.set(w / 2, h / 2 - 20);
@@ -1429,13 +1392,13 @@ export async function startGame(app: Application) {
       phase = "characterSelect";
       layoutOverlay();
     }, true);
-    again.position.set(w / 2, h / 2 + 80);
+    again.position.set(w / 2 - 140, h / 2 + 70);
     const menu = menuBtn("MAIN MENU", () => {
       phase = "mainMenu";
       clearEntities();
       layoutOverlay();
     });
-    menu.position.set(w / 2, h / 2 + 138);
+    menu.position.set(w / 2 - 140, h / 2 + 142);
     c.addChild(again, menu);
     return c;
   }
@@ -1562,294 +1525,9 @@ export async function startGame(app: Application) {
     else if (phase === "levelUp") {
       updateCamera();
       updateHudDisplay();
+      levelUpPanel.tick(dt);
     }
 
     input.flush();
   });
-}
-
-function buildHud(parent: Container) {
-  const root = new Container();
-  parent.addChild(root);
-
-  const hpBar = new Graphics();
-  const xpBar = new Graphics();
-  const hpText = new Text({
-    text: "",
-    style: { fill: 0xff8899, fontSize: 11, fontFamily: "monospace" },
-  });
-  const xpText = new Text({
-    text: "",
-    style: { fill: 0x88bbff, fontSize: 11, fontFamily: "monospace" },
-  });
-  const info = new Text({
-    text: "",
-    style: { fill: 0xffffff, fontSize: 14, fontFamily: "monospace" },
-  });
-
-  const skillsRoot = new Container();
-  const SLOT_W = 108;
-  const SLOT_H = 56;
-  const SLOT_GAP = 8;
-
-  const skillSlots = [0, 1].map(() => {
-    const slot = new Container();
-    const bg = new Graphics();
-    const ring = new Graphics();
-    const name = new Text({
-      text: "",
-      style: {
-        fill: 0xffffff,
-        fontSize: 11,
-        fontFamily: "monospace",
-        fontWeight: "bold",
-        align: "center",
-        wordWrap: true,
-        wordWrapWidth: SLOT_W - 36,
-      },
-    });
-    const cd = new Text({
-      text: "",
-      style: { fill: 0xaabbcc, fontSize: 11, fontFamily: "monospace" },
-    });
-    name.anchor.set(0.5, 0);
-    cd.anchor.set(0.5, 0);
-    slot.addChild(bg, ring, name, cd);
-    skillsRoot.addChild(slot);
-    return { slot, bg, ring, name, cd };
-  });
-
-  root.addChild(hpBar, xpBar, hpText, xpText, info, skillsRoot);
-
-  function drawSkillSlot(
-    g: Graphics,
-    ready: boolean,
-  ) {
-    g.clear();
-    g.roundRect(0, 0, SLOT_W, SLOT_H, 6).fill(ready ? 0x243040 : 0x1a2030);
-    g.roundRect(0, 0, SLOT_W, SLOT_H, 6).stroke({
-      width: 2,
-      color: ready ? 0x66cc88 : 0x445566,
-    });
-  }
-
-  function drawSkillRing(
-    g: Graphics,
-    ratio: number,
-    ready: boolean,
-  ) {
-    g.clear();
-    const cx = SLOT_W - 16;
-    const cy = SLOT_H / 2;
-    const r = 12;
-    g.circle(cx, cy, r).stroke({ width: 3, color: 0x333344 });
-    if (!ready && ratio < 1) {
-      g.arc(cx, cy, r, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * (1 - ratio))
-        .stroke({ width: 3, color: 0x4488ff });
-    } else if (ready) {
-      g.circle(cx, cy, r).stroke({ width: 3, color: 0x66cc88 });
-    }
-  }
-
-  return {
-    root,
-    layout(w: number, h: number) {
-      info.position.set(16, 16);
-      hpBar.position.set(16, 38);
-      xpBar.position.set(16, 56);
-      hpText.position.set(222, 38);
-      xpText.position.set(222, 56);
-
-      const totalW = SLOT_W * 2 + SLOT_GAP;
-      skillsRoot.position.set(w - totalW - 16, h - SLOT_H - 16);
-      skillSlots[0].slot.position.set(0, 0);
-      skillSlots[1].slot.position.set(SLOT_W + SLOT_GAP, 0);
-    },
-    update(opts: {
-      hp: number;
-      maxHp: number;
-      xp: number;
-      xpMax: number;
-      level: number;
-      wave: number;
-      time: string;
-      gold: number;
-      totalGold: number;
-      skillQ: number;
-      skillR: number;
-      skillQName: string;
-      skillRName: string;
-      skillQMax: number;
-      skillRMax: number;
-      kills: number;
-      visible: boolean;
-    }) {
-      root.visible = opts.visible;
-      if (!opts.visible) return;
-
-      hpBar.clear();
-      hpBar.roundRect(0, 0, 200, 12, 2).fill(0x222830);
-      hpBar.roundRect(0, 0, 200 * (opts.hp / opts.maxHp), 12, 2).fill(0xee4455);
-
-      xpBar.clear();
-      xpBar.roundRect(0, 0, 200, 8, 2).fill(0x222830);
-      xpBar.roundRect(0, 0, 200 * (opts.xp / opts.xpMax), 8, 2).fill(0x4488ff);
-
-      hpText.text = `${Math.ceil(opts.hp)} / ${Math.ceil(opts.maxHp)} HP`;
-      xpText.text = `${Math.floor(opts.xp)} / ${opts.xpMax} XP`;
-
-      info.text =
-        `Lv ${opts.level}  Wave ${opts.wave}  ${opts.time}  Kills ${opts.kills}  Gold ${opts.gold}`;
-
-      const skillData = [
-        {
-          name: opts.skillQName,
-          cd: opts.skillQ,
-          max: opts.skillQMax,
-        },
-        {
-          name: opts.skillRName,
-          cd: opts.skillR,
-          max: opts.skillRMax,
-        },
-      ];
-
-      skillSlots.forEach((ui, i) => {
-        const data = skillData[i];
-        const ready = data.cd <= 0;
-        const ratio = data.max > 0 ? Math.min(1, data.cd / data.max) : 0;
-        drawSkillSlot(ui.bg, ready);
-        drawSkillRing(ui.ring, ratio, ready);
-        ui.name.text = data.name;
-        ui.name.position.set(SLOT_W / 2, 10);
-        ui.cd.text = ready ? "READY" : `${data.cd.toFixed(1)}s`;
-        ui.cd.style.fill = ready ? 0x66cc88 : 0x8899aa;
-        ui.cd.position.set(SLOT_W / 2, 30);
-      });
-    },
-  };
-}
-
-function createLevelUpPanel(opts: {
-  onPick: (id: UpgradeId) => void;
-  getChoices: () => UpgradeId[];
-  getFocus: () => number;
-  getLevel: () => number;
-  getUpgradeLevels: () => Partial<Record<UpgradeId, number>>;
-}) {
-  const root = new Container();
-  root.visible = false;
-
-  const dim = new Graphics();
-  const box = new Graphics();
-  const title = new Text({
-    text: "",
-    style: {
-      fill: 0xffcc44,
-      fontSize: 28,
-      fontFamily: "monospace",
-      fontWeight: "bold",
-    },
-  });
-  title.anchor.set(0.5);
-
-  const cards = [0, 1, 2].map(() => {
-    const slot = new Container();
-    slot.eventMode = "static";
-    slot.cursor = "pointer";
-    const bg = new Graphics();
-    const icon = new Text({
-      text: "",
-      style: { fill: 0xffcc44, fontSize: 32, fontFamily: "monospace" },
-    });
-    icon.anchor.set(0.5);
-    icon.y = -30;
-    const name = new Text({
-      text: "",
-      style: {
-        fill: 0xffffff,
-        fontSize: 16,
-        fontFamily: "monospace",
-        fontWeight: "bold",
-      },
-    });
-    name.anchor.set(0.5);
-    name.y = 5;
-    const desc = new Text({
-      text: "",
-      style: {
-        fill: 0x8899aa,
-        fontSize: 12,
-        fontFamily: "monospace",
-        align: "center",
-        lineHeight: 16,
-      },
-    });
-    desc.anchor.set(0.5);
-    desc.y = 40;
-    slot.addChild(bg, icon, name, desc);
-    return { slot, bg, icon, name, desc, pickId: null as UpgradeId | null };
-  });
-
-  cards.forEach((card) => {
-    card.slot.on("pointertap", () => {
-      if (card.pickId) opts.onPick(card.pickId);
-    });
-  });
-
-  root.addChild(dim, box, title, ...cards.map((c) => c.slot));
-
-  return {
-    root,
-    show() {
-      root.visible = true;
-    },
-    hide() {
-      root.visible = false;
-    },
-    refresh(w: number, h: number) {
-      dim.clear().rect(0, 0, w, h).fill({ color: 0x000000, alpha: 0.55 });
-
-      box.clear();
-      box.roundRect(w / 2 - 340, h / 2 - 160, 680, 320, 8).fill(0x1a2030);
-      box
-        .roundRect(w / 2 - 340, h / 2 - 160, 680, 320, 8)
-        .stroke({ width: 2, color: 0x445566 });
-
-      title.text = `LEVEL UP! — Level ${opts.getLevel()}`;
-      title.position.set(w / 2, h / 2 - 120);
-
-      const choices = opts.getChoices();
-      const focus = opts.getFocus();
-      const levels = opts.getUpgradeLevels();
-
-      cards.forEach((card, i) => {
-        const id = choices[i];
-        if (!id) {
-          card.slot.visible = false;
-          card.pickId = null;
-          return;
-        }
-
-        card.slot.visible = true;
-        card.pickId = id;
-        const up = UPGRADES.find((u) => u.id === id)!;
-        const lvl = levels[id] ?? 0;
-        const focused = focus === i;
-
-        card.bg.clear();
-        card.bg
-          .roundRect(-100, -70, 200, 140, 6)
-          .fill(focused ? 0x283848 : 0x1a2430);
-        card.bg
-          .roundRect(-100, -70, 200, 140, 6)
-          .stroke({ width: 2, color: focused ? 0x88ccff : 0x445566 });
-
-        card.icon.text = up.icon;
-        card.name.text = up.name;
-        card.desc.text = `${up.desc}\n(Lv ${lvl})`;
-        card.slot.position.set(w / 2 - 220 + i * 220, h / 2 + 10);
-      });
-    },
-  };
 }

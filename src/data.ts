@@ -177,7 +177,7 @@ export const ENEMY_DEFS: Record<EnemyKind, EnemyDef> = {
   },
   slimeSmall: {
     kind: "slimeSmall",
-    hp: 24,
+    hp: 16,
     speed: 58,
     radius: 10,
     damage: 6,

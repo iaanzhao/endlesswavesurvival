@@ -1,4 +1,13 @@
+import { Container, Rectangle } from "pixi.js";
 import { defaultSave, type SaveData } from "./data";
+
+/** Full rectangular hit target; children won't steal pointer events. */
+export function setClickHitArea(container: Container, width: number, height: number): void {
+  container.hitArea = new Rectangle(0, 0, width, height);
+  for (const child of container.children) {
+    child.eventMode = "none";
+  }
+}
 
 export class Input {
   keys = new Set<string>();
