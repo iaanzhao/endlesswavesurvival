@@ -1,4 +1,11 @@
-import { CHARACTERS } from "./data";
+import {
+  CHARACTERS,
+  ENEMY_DEFS,
+  ENEMY_SPAWN_WEIGHTS,
+  MAPS,
+  type EnemyKind,
+  type MapId,
+} from "./data";
 import { SKILL_COOLDOWNS } from "./bonusSkills";
 import type { StatIconId } from "./uiDraw";
 
@@ -166,3 +173,157 @@ export const SKILL_STAT_ENTRIES: SkillStatEntry[] = [
   ...classEntries(),
   ...bonusEntries(),
 ];
+
+export interface MapStatEntry {
+  id: MapId;
+  name: string;
+  desc: string;
+  accentColor: number;
+  terrain: string;
+  arena: string;
+  extra?: string;
+}
+
+const MAP_META: Record<MapId, { terrain: string; extra: string }> = {
+  graveyard: {
+    terrain: "Tombstones · rocks · dead trees",
+    extra: "44 obstacles spread across the full arena",
+  },
+  ember: {
+    terrain: "Lava rocks · obsidian pillars · warp fissures",
+    extra: "38 obstacles + 10 warp fissures across the map",
+  },
+  frost: {
+    terrain: "Ice pillars · snow boulders · heal crystals",
+    extra: "38 obstacles + 10 heal crystals across the map",
+  },
+  void: {
+    terrain: "Void monoliths · shadow rocks · blink rifts",
+    extra: "38 obstacles + 10 blink rifts across the map",
+  },
+};
+
+export const MAP_STAT_ENTRIES: MapStatEntry[] = MAPS.map((map) => ({
+  id: map.id,
+  name: map.name,
+  desc: map.desc,
+  accentColor: map.accentColor,
+  terrain: MAP_META[map.id].terrain,
+  arena: "2400 radius circle",
+  extra: MAP_META[map.id].extra,
+}));
+
+export interface EnemyStatEntry {
+  kind: EnemyKind;
+  name: string;
+  desc: string;
+  accent: number;
+  tag: string;
+  hp: string;
+  damage: string;
+  speed: string;
+  rewards: string;
+  extra?: string;
+}
+
+const ENEMY_META: Record<
+  EnemyKind,
+  { name: string; desc: string; spawnNote: string }
+> = {
+  slimeSmall: {
+    name: "Small Slime",
+    desc: "Weak swarm fodder — appears in huge numbers",
+    spawnNote: "Very common from wave 1",
+  },
+  bat: {
+    name: "Bat",
+    desc: "Fast flier that closes gaps quickly",
+    spawnNote: "Common · more bats after wave 18",
+  },
+  ghost: {
+    name: "Ghost",
+    desc: "Balanced ranged threat with steady pressure",
+    spawnNote: "Common from wave 1",
+  },
+  skeleton: {
+    name: "Skeleton",
+    desc: "Tougher bones with a bit more bite",
+    spawnNote: "Uncommon until wave 3+",
+  },
+  slimeMedium: {
+    name: "Medium Slime",
+    desc: "Chunky blob with higher HP and damage",
+    spawnNote: "Rare early · more common wave 7+",
+  },
+  skull: {
+    name: "Skull",
+    desc: "Quick hitter that punishes slow builds",
+    spawnNote: "Uncommon until wave 5+",
+  },
+  slimeBig: {
+    name: "Big Slime",
+    desc: "Mini-tank slime with heavy contact damage",
+    spawnNote: "Very rare until wave 10+",
+  },
+  brute: {
+    name: "Brute",
+    desc: "Elite tank — slow but extremely dangerous",
+    spawnNote: "Rare elite · more likely wave 14+",
+  },
+};
+
+function spawnRarity(weight: number): string {
+  if (weight >= 20) return "Very common";
+  if (weight >= 12) return "Common";
+  if (weight >= 8) return "Uncommon";
+  if (weight >= 3) return "Rare";
+  return "Very rare";
+}
+
+const ENEMY_STAT_ORDER: EnemyKind[] = [
+  "slimeSmall",
+  "bat",
+  "ghost",
+  "skeleton",
+  "slimeMedium",
+  "skull",
+  "slimeBig",
+  "brute",
+];
+
+export const ENEMY_STAT_ENTRIES: EnemyStatEntry[] = ENEMY_STAT_ORDER.map((kind) => {
+  const def = ENEMY_DEFS[kind];
+  const meta = ENEMY_META[kind];
+  const weight = ENEMY_SPAWN_WEIGHTS[kind];
+  return {
+    kind,
+    name: meta.name,
+    desc: meta.desc,
+    accent: def.tint,
+    tag: spawnRarity(weight),
+    hp: `${def.hp}`,
+    damage: `${def.damage}`,
+    speed: `${def.speed}`,
+    rewards: `${def.xp} XP · ${def.gold}g`,
+    extra: `${meta.spawnNote} · +HP scales with wave`,
+  };
+});
+
+export type StatTab = "skills" | "maps" | "enemies";
+
+export const STAT_TABS: { id: StatTab; label: string }[] = [
+  { id: "skills", label: "Skills" },
+  { id: "maps", label: "Maps" },
+  { id: "enemies", label: "Enemies" },
+];
+
+export function getStatEntryCount(tab: StatTab): number {
+  switch (tab) {
+    case "skills":
+      return SKILL_STAT_ENTRIES.length;
+    case "maps":
+      return MAP_STAT_ENTRIES.length;
+    case "enemies":
+      return ENEMY_STAT_ENTRIES.length;
+  }
+}

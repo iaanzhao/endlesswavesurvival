@@ -8,6 +8,7 @@ import {
   drawCoinIcon,
   drawMenuButtonBg,
   drawPanelFrame,
+  drawUpgradeCardBg,
   drawUpgradeIconFrame,
 } from "./uiDraw";
 import { FONT, titleStyle, UI } from "./uiTheme";
@@ -118,12 +119,7 @@ function drawShopCard(
   const accent = SHOP_ACCENT[item.id];
 
   const bg = new Graphics();
-  drawPanelFrame(bg, CARD_W, CARD_H);
-  if (focused) {
-    bg.rect(0, 0, CARD_W, CARD_H).stroke({ width: 2, color: UI.cardSelected });
-  } else if (equipped) {
-    bg.rect(0, 0, CARD_W, CARD_H).stroke({ width: 1, color: UI.textGreen, alpha: 0.5 });
-  }
+  drawUpgradeCardBg(bg, CARD_W, CARD_H, focused || equipped, accent);
   card.addChild(bg);
 
   const iconCx = 30;
@@ -146,6 +142,7 @@ function drawShopCard(
       fontSize: 15,
       fontFamily: FONT,
       fontWeight: "bold",
+      stroke: { color: 0x000000, width: focused ? 3 : 2 },
     },
   });
   title.position.set(58, 14);
@@ -316,11 +313,12 @@ export function buildShopPanel(
   const backLabel = new Text({
     text: "BACK",
     style: {
-      fill: UI.menuText,
-      fontSize: 28,
+      fill: UI.textPrimary,
+      fontSize: 24,
       fontFamily: FONT,
       letterSpacing: 3,
       fontWeight: "bold",
+      stroke: { color: 0x000000, width: 3 },
     },
   });
   backLabel.anchor.set(0.5);

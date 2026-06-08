@@ -160,7 +160,7 @@ export const ENEMY_DEFS: Record<EnemyKind, EnemyDef> = {
     hp: 30,
     speed: 68,
     radius: 15,
-    damage: 8,
+    damage: 12,
     xp: 6,
     gold: 1,
     tint: 0xe8e4ff,
@@ -170,7 +170,7 @@ export const ENEMY_DEFS: Record<EnemyKind, EnemyDef> = {
     hp: 42,
     speed: 72,
     radius: 14,
-    damage: 10,
+    damage: 15,
     xp: 8,
     gold: 1,
     tint: 0xf0eee0,
@@ -180,7 +180,7 @@ export const ENEMY_DEFS: Record<EnemyKind, EnemyDef> = {
     hp: 16,
     speed: 58,
     radius: 10,
-    damage: 6,
+    damage: 9,
     xp: 5,
     gold: 1,
     tint: 0xe0ffe8,
@@ -190,7 +190,7 @@ export const ENEMY_DEFS: Record<EnemyKind, EnemyDef> = {
     hp: 55,
     speed: 62,
     radius: 13,
-    damage: 12,
+    damage: 18,
     xp: 10,
     gold: 2,
     tint: 0xc8ffd8,
@@ -200,7 +200,7 @@ export const ENEMY_DEFS: Record<EnemyKind, EnemyDef> = {
     hp: 90,
     speed: 48,
     radius: 18,
-    damage: 18,
+    damage: 27,
     xp: 16,
     gold: 3,
     tint: 0xa8ffcc,
@@ -210,7 +210,7 @@ export const ENEMY_DEFS: Record<EnemyKind, EnemyDef> = {
     hp: 50,
     speed: 80,
     radius: 15,
-    damage: 12,
+    damage: 18,
     xp: 9,
     gold: 2,
     tint: 0xffe8e0,
@@ -220,7 +220,7 @@ export const ENEMY_DEFS: Record<EnemyKind, EnemyDef> = {
     hp: 28,
     speed: 95,
     radius: 14,
-    damage: 7,
+    damage: 10,
     xp: 6,
     gold: 1,
     tint: 0xe8e0ff,
@@ -230,7 +230,7 @@ export const ENEMY_DEFS: Record<EnemyKind, EnemyDef> = {
     hp: 160,
     speed: 52,
     radius: 22,
-    damage: 22,
+    damage: 33,
     xp: 28,
     gold: 5,
     tint: 0xffe8d8,
@@ -551,6 +551,61 @@ export const DIFFICULTIES: DifficultyDef[] = [
 
 export function getDifficulty(id: DifficultyId): DifficultyDef {
   return DIFFICULTIES.find((d) => d.id === id) ?? DIFFICULTIES[1];
+}
+
+export type MapId = "graveyard" | "ember" | "frost" | "void";
+
+export interface MapDef {
+  id: MapId;
+  name: string;
+  desc: string;
+  tileA: number;
+  tileB: number;
+  borderColor: number;
+  accentColor: number;
+}
+
+export const MAPS: MapDef[] = [
+  {
+    id: "graveyard",
+    name: "Graveyard",
+    desc: "Misty stone ruins",
+    tileA: 0x1a2230,
+    tileB: 0x151c28,
+    borderColor: 0x334455,
+    accentColor: 0x667788,
+  },
+  {
+    id: "ember",
+    name: "Ember Fields",
+    desc: "Scorched lava flats",
+    tileA: 0x2a1410,
+    tileB: 0x1e0e0a,
+    borderColor: 0x884422,
+    accentColor: 0xff6622,
+  },
+  {
+    id: "frost",
+    name: "Frost Ruins",
+    desc: "Frozen crystal wastes",
+    tileA: 0x1a2838,
+    tileB: 0x142030,
+    borderColor: 0x4488aa,
+    accentColor: 0x88ccff,
+  },
+  {
+    id: "void",
+    name: "Void Chasm",
+    desc: "Twisted shadow realm",
+    tileA: 0x18141e,
+    tileB: 0x100c14,
+    borderColor: 0x6644aa,
+    accentColor: 0xaa66ff,
+  },
+];
+
+export function getMap(id: MapId): MapDef {
+  return MAPS.find((m) => m.id === id) ?? MAPS[0];
 }
 
 export function spawnIntervalForWave(wave: number, difficulty?: DifficultyDef): number {

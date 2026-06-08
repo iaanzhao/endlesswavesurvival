@@ -14,8 +14,10 @@ import {
   computeStats,
   defaultRunShopBuffs,
   DIFFICULTIES,
+  MAPS,
   getCharacter,
   getDifficulty,
+  getMap,
   pickWeightedEnemy,
   spawnBatchForWave,
   spawnIntervalForWave,
@@ -25,6 +27,7 @@ import {
   type CharacterDef,
   type CharacterId,
   type DifficultyId,
+  type MapId,
   type EnemyKind,
   type ShopItemId,
   type UpgradeId,
@@ -32,7 +35,7 @@ import {
 import { Input, dist, formatTime, loadSave, pickRandom, saveGame, setClickHitArea } from "./util";
 import { createGameHud, type HudSkillSlot } from "./uiHud";
 import { createLevelUpPanel } from "./uiLevelUp";
-import { drawMenuButtonBg, drawPanelFrame } from "./uiDraw";
+import { drawMenuButtonBg, drawPanelFrame, drawUpgradeCardBg } from "./uiDraw";
 import { bodyStyle, FONT, menuTitleStyle, titleStyle, UI } from "./uiTheme";
 import { createMenuBackdrop } from "./menuBackdrop";
 import {
@@ -59,9 +62,22 @@ import {
 } from "./uiDeath";
 import {
   buildStatisticsPanel,
-  STATS_SCROLL_MAX,
+  getStatScrollMax,
 } from "./uiStatistics";
+import type { StatTab } from "./statCatalog";
 import { buildShopPanel } from "./uiShop";
+import { buildPauseMenu } from "./uiPauseMenu";
+import { drawMapPreview } from "./uiMapPreview";
+import {
+  buildMapTerrainStatic,
+  findTerrainPartners,
+  getMapTerrain,
+  isInteractiveTerrain,
+  refreshInteractiveTerrain,
+  resolveTerrainCollision,
+  TERRAIN_INTERACT,
+  type TerrainFeature,
+} from "./mapTerrain";
 import {
   getOrbiterConfig,
   OrbiterSystem,
@@ -158,6 +174,7 @@ interface Pickup {
 }
 
 const ARENA = 2400;
+const PLAYER_TERRAIN_RADIUS = 12;
 const DASH_DURATION = 0.18;
 const DASH_COOLDOWN = 1.0;
 const DASH_SPEED = 420;
@@ -175,6 +192,14 @@ export async function startGame(app: Application) {
 
   const world = new Container();
   const floor = new Graphics();
+  const terrain = new Container();
+  const terrainStatic = new Container();
+  const terrainInteractive = new Container();
+  terrain.addChild(terrainStatic, terrainInteractive);
+  let terrainFeatures: TerrainFeature[] = getMapTerrain("graveyard");
+  let terrainCooldowns: number[] = [];
+  let terrainAnimTime = 0;
+  let terrainSpeedTimer = 0;
   const vignette = new Graphics();
   const ui = new Container();
   root.addChild(world, ui);
@@ -182,11 +207,14 @@ export async function startGame(app: Application) {
   let phase: Phase = "mainMenu";
   let charFocus = 0;
   let difficultyFocus = 1;
-  let charSelectSection: "hero" | "difficulty" | "actions" = "hero";
+  let charSelectSection: "hero" | "difficulty" | "map" | "actions" = "hero";
   let charSelectActionFocus = 0;
   let activeDifficultyId: DifficultyId = "normal";
+  let mapFocus = 0;
+  let activeMapId: MapId = "graveyard";
   let menuFocus = 0;
   let statsScroll = 0;
+  let statsTab: StatTab = "skills";
   let deathSummaryActive = false;
   let lastDeathStats: DeathScreenStats | null = null;
   let shopFocus = 0;
@@ -240,7 +268,7 @@ export async function startGame(app: Application) {
   const enemyLayer = new Container();
   const fxLayer = new Container();
   const pickupLayer = new Container();
-  world.addChild(floor, enemyLayer, pickupLayer, fxLayer, playerGfx);
+  world.addChild(floor, terrain, enemyLayer, pickupLayer, fxLayer, playerGfx);
   const orbiterSystem = new OrbiterSystem(world);
 
   const bonusSkillCooldowns: Partial<
@@ -392,14 +420,121 @@ export async function startGame(app: Application) {
 
   function drawFloor() {
     floor.clear();
+    const map = getActiveMap();
+    terrainFeatures = getMapTerrain(activeMapId);
     const tile = 64;
     for (let x = -ARENA; x <= ARENA; x += tile) {
       for (let y = -ARENA; y <= ARENA; y += tile) {
-        const c = ((x / tile + y / tile) & 1) === 0 ? 0x1a2230 : 0x151c28;
+        const c = ((x / tile + y / tile) & 1) === 0 ? map.tileA : map.tileB;
         floor.rect(x, y, tile, tile).fill(c);
       }
     }
-    floor.circle(0, 0, ARENA).stroke({ width: 6, color: 0x334455, alpha: 0.6 });
+    floor.circle(0, 0, ARENA).stroke({ width: 6, color: map.borderColor, alpha: 0.6 });
+    floor.circle(0, 0, ARENA - 4).stroke({ width: 2, color: map.accentColor, alpha: 0.25 });
+    terrainCooldowns = terrainFeatures.map(() => 0);
+    terrainAnimTime = 0;
+    terrainSpeedTimer = 0;
+    buildMapTerrainStatic(terrainStatic, map, terrainFeatures);
+    refreshInteractiveTerrain(
+      terrainInteractive,
+      map,
+      terrainFeatures,
+      terrainCooldowns,
+      terrainAnimTime,
+    );
+  }
+
+  function refreshTerrainVisuals() {
+    refreshInteractiveTerrain(
+      terrainInteractive,
+      getActiveMap(),
+      terrainFeatures,
+      terrainCooldowns,
+      terrainAnimTime,
+    );
+  }
+
+  function applyTerrainCollision(x: number, y: number, radius: number) {
+    return resolveTerrainCollision(x, y, radius, terrainFeatures);
+  }
+
+  function triggerTerrainWarp(
+    fromIdx: number,
+    kind: "fissure" | "rift",
+    color: number,
+    label: string,
+    iframe: number,
+  ) {
+    const partners = findTerrainPartners(terrainFeatures, fromIdx, kind);
+    if (partners.length === 0) return;
+
+    const from = terrainFeatures[fromIdx];
+    const destIdx = partners[Math.floor(Math.random() * partners.length)];
+    const dest = terrainFeatures[destIdx];
+    const def = TERRAIN_INTERACT[kind];
+
+    addTransientFx(spawnNovaFx(from.x, from.y, 52, color, 0.45));
+    playerX = dest.x;
+    playerY = dest.y;
+    const pushed = applyTerrainCollision(playerX, playerY, PLAYER_TERRAIN_RADIUS);
+    playerX = pushed.x;
+    playerY = pushed.y;
+    playerGfx.position.set(playerX, playerY);
+    invincible = Math.max(invincible, iframe);
+    addTransientFx(spawnNovaFx(dest.x, dest.y, 64, color, 0.55));
+    if (kind === "rift") {
+      addTransientFx(spawnSmokeFx(dest.x, dest.y));
+    }
+    spawnFloatingLabel(dest.x, dest.y - 28, label, color);
+
+    terrainCooldowns[fromIdx] = def.cooldown;
+    terrainCooldowns[destIdx] = def.cooldown * 0.6;
+  }
+
+  function tickTerrainInteractions() {
+    for (let i = 0; i < terrainFeatures.length; i++) {
+      const f = terrainFeatures[i];
+      if (!isInteractiveTerrain(f.kind)) continue;
+      if ((terrainCooldowns[i] ?? 0) > 0) continue;
+
+      const def = TERRAIN_INTERACT[f.kind];
+      if (dist(playerX, playerY, f.x, f.y) > def.triggerRadius) continue;
+
+      if (f.kind === "crystal") {
+        const heal = 18;
+        const before = playerHp;
+        playerHp = Math.min(stats.maxHp, playerHp + heal);
+        const actual = playerHp - before;
+        if (actual > 0) spawnFloatingNumber(playerX, playerY - 24, actual, "heal");
+        terrainSpeedTimer = 2.8;
+        spawnFloatingLabel(playerX, playerY - 42, "SPEED UP", 0x88ddff);
+        addTransientFx(spawnHealAuraFx(playerX, playerY, 48));
+        terrainCooldowns[i] = def.cooldown;
+      } else if (f.kind === "fissure") {
+        triggerTerrainWarp(i, "fissure", 0xff6622, "WARP", 0.35);
+      } else if (f.kind === "rift") {
+        triggerTerrainWarp(i, "rift", 0xaa66ff, "BLINK", 0.55);
+      }
+      break;
+    }
+  }
+
+  function mapHasInteractiveTerrain(): boolean {
+    return terrainFeatures.some((f) => isInteractiveTerrain(f.kind));
+  }
+
+  function tickTerrainSystems(dt: number) {
+    if (!mapHasInteractiveTerrain()) return;
+
+    terrainAnimTime += dt;
+    if (terrainSpeedTimer > 0) terrainSpeedTimer = Math.max(0, terrainSpeedTimer - dt);
+    for (let i = 0; i < terrainCooldowns.length; i++) {
+      if (terrainCooldowns[i] > 0) {
+        terrainCooldowns[i] = Math.max(0, terrainCooldowns[i] - dt);
+      }
+    }
+    tickTerrainInteractions();
+    refreshTerrainVisuals();
   }
 
   function drawVignette() {
@@ -488,6 +623,10 @@ export async function startGame(app: Application) {
 
   function getActiveDifficulty() {
     return getDifficulty(activeDifficultyId);
+  }
+
+  function getActiveMap() {
+    return getMap(activeMapId);
   }
 
   function startRun(charId: CharacterId) {
@@ -629,6 +768,23 @@ export async function startGame(app: Application) {
 
   function hasEnemyInRange(range: number): boolean {
     return findNearestEnemy(range) !== null;
+  }
+
+  function spawnFloatingLabel(x: number, y: number, label: string, fill: number) {
+    const text = new Text({
+      text: label,
+      style: {
+        fill,
+        fontSize: 14,
+        fontFamily: FONT,
+        fontWeight: "bold",
+        stroke: { color: 0x000000, width: 3 },
+      },
+    });
+    text.anchor.set(0.5);
+    text.position.set(x, y);
+    floatingNums.push({ x, y, vy: -52, life: 0.9, text });
+    world.addChild(text);
   }
 
   function spawnFloatingNumber(
@@ -1228,6 +1384,7 @@ export async function startGame(app: Application) {
 
   function quitToMainMenu() {
     saveRunProgress();
+    clearRunShopBuffs();
     phase = "mainMenu";
     deathSummaryActive = false;
     lastDeathStats = null;
@@ -1259,6 +1416,9 @@ export async function startGame(app: Application) {
       playerY += move.y * speed * dt;
     }
     clampPlayer();
+    const playerPos = applyTerrainCollision(playerX, playerY, PLAYER_TERRAIN_RADIUS);
+    playerX = playerPos.x;
+    playerY = playerPos.y;
     playerGfx.position.set(playerX, playerY);
 
     if (dashCooldown > 0) dashCooldown -= dt;
@@ -1271,6 +1431,7 @@ export async function startGame(app: Application) {
     if (invincible > 0) invincible -= dt;
     if (smokeTimer > 0) smokeTimer -= dt;
     if (attackSwingTimer > 0) attackSwingTimer -= dt;
+    tickTerrainSystems(dt);
     if (playerHp < stats.maxHp) playerHp = Math.min(stats.maxHp, playerHp + stats.regen * dt);
 
     attackTimer -= dt;
@@ -1303,6 +1464,11 @@ export async function startGame(app: Application) {
 
       e.x += (dx / len) * e.speed * dt * moveScale;
       e.y += (dy / len) * e.speed * dt * moveScale;
+      if (e.spawnTimer <= 0) {
+        const pushed = applyTerrainCollision(e.x, e.y, e.radius);
+        e.x = pushed.x;
+        e.y = pushed.y;
+      }
       if (e.spawnTimer > 0) e.spawnTimer -= dt;
 
       e.wobblePhase += dt * getEnemyWobbleRate(e.kind);
@@ -1498,14 +1664,28 @@ export async function startGame(app: Application) {
   }
 
   function scrollStatistics(deltaY: number) {
-    if (deltaY === 0 || STATS_SCROLL_MAX <= 0) return;
+    const scrollMax = getStatScrollMax(statsTab);
+    if (deltaY === 0 || scrollMax <= 0) return;
     const step = Math.max(1, Math.round(Math.abs(deltaY) / 50));
     if (deltaY > 0) {
-      statsScroll = Math.min(STATS_SCROLL_MAX, statsScroll + step);
+      statsScroll = Math.min(scrollMax, statsScroll + step);
     } else {
       statsScroll = Math.max(0, statsScroll - step);
     }
     layoutOverlay();
+  }
+
+  function setStatsTab(tab: StatTab) {
+    if (statsTab === tab) return;
+    statsTab = tab;
+    statsScroll = 0;
+    layoutOverlay();
+  }
+
+  function cycleStatsTab(dir: 1 | -1) {
+    const tabs: StatTab[] = ["skills", "maps", "enemies"];
+    const idx = tabs.indexOf(statsTab);
+    setStatsTab(tabs[(idx + dir + tabs.length) % tabs.length]);
   }
 
   function layoutOverlay() {
@@ -1526,10 +1706,18 @@ export async function startGame(app: Application) {
       overlay.addChild(buildCharacterSelect(w, h));
     } else if (phase === "statistics") {
       overlay.addChild(
-        buildStatisticsPanel(w, h, statsScroll, () => {
-          phase = "mainMenu";
-          layoutOverlay();
-        }, scrollStatistics),
+        buildStatisticsPanel(
+          w,
+          h,
+          statsTab,
+          statsScroll,
+          () => {
+            phase = "mainMenu";
+            layoutOverlay();
+          },
+          scrollStatistics,
+          setStatsTab,
+        ),
       );
     } else if (phase === "help") {
       overlay.addChild(buildHelp(w, h));
@@ -1554,7 +1742,27 @@ export async function startGame(app: Application) {
         buildDeathScreen(w, h, getDeathStats(), finishDeathAndGoHome),
       );
     } else if (phase === "paused") {
-      overlay.addChild(buildPauseMenu(w, h));
+      overlay.addChild(
+        buildPauseMenu(
+          w,
+          h,
+          {
+            character,
+            difficultyName: getActiveDifficulty().name,
+            playerLevel,
+            wave,
+            gameTime,
+            kills,
+            runGold,
+            upgradeLevels,
+            runShopBuffs,
+          },
+          pauseMenuFocus,
+          resumeFromPause,
+          restartFromPause,
+          quitToMainMenu,
+        ),
+      );
     }
   }
 
@@ -1574,7 +1782,12 @@ export async function startGame(app: Application) {
     return c;
   }
 
-  function menuBtn(label: string, onClick: () => void, focused = false): Container {
+  function menuBtn(
+    label: string,
+    onClick: () => void,
+    focused = false,
+    accent = UI.cardSelectedGlow,
+  ): Container {
     const btn = new Container();
     btn.eventMode = "static";
     btn.cursor = "pointer";
@@ -1582,11 +1795,12 @@ export async function startGame(app: Application) {
     const text = new Text({
       text: label,
       style: {
-        fill: UI.menuText,
-        fontSize: label.length > 8 ? 22 : 28,
+        fill: UI.textPrimary,
+        fontSize: label.length > 8 ? 20 : 24,
         fontFamily: FONT,
         letterSpacing: label.length > 8 ? 2 : 3,
         fontWeight: "bold",
+        stroke: { color: 0x000000, width: focused ? 3 : 2 },
       },
     });
     text.anchor.set(0.5);
@@ -1594,7 +1808,7 @@ export async function startGame(app: Application) {
     const padY = 16;
     const btnW = text.width + padX * 2;
     const btnH = text.height + padY * 2;
-    drawMenuButtonBg(g, btnW, btnH, focused);
+    drawMenuButtonBg(g, btnW, btnH, focused, accent);
     text.position.set(btnW / 2, btnH / 2);
     btn.addChild(g, text);
     setClickHitArea(btn, btnW, btnH);
@@ -1629,6 +1843,7 @@ export async function startGame(app: Application) {
       },
       () => {
         statsScroll = 0;
+        statsTab = "skills";
         phase = "statistics";
         layoutOverlay();
       },
@@ -1661,23 +1876,25 @@ export async function startGame(app: Application) {
   }
 
   function buildCharacterSelect(w: number, h: number): Container {
-    const panelH = 560;
-    const c = panelBg(w, h, 760, panelH);
+    const panelW = Math.min(920, w - 24);
+    const panelH = Math.min(820, h - 24);
+    const c = panelBg(w, h, panelW, panelH);
     const panelTop = h / 2 - panelH / 2;
 
     const title = new Text({
-      text: "Choose your hero",
-      style: titleStyle,
+      text: "New Game",
+      style: { ...titleStyle, fontSize: 30 },
     });
     title.anchor.set(0.5);
-    title.position.set(w / 2, panelTop + 44);
+    title.position.set(w / 2, panelTop + 42);
     c.addChild(title);
 
-    const cardW = 168;
-    const cardH = 196;
-    const totalCardsW = CHARACTERS.length * cardW;
+    const cardW = 204;
+    const cardH = 224;
+    const cardGap = 14;
+    const totalCardsW = CHARACTERS.length * cardW + (CHARACTERS.length - 1) * cardGap;
     const cardsStartX = w / 2 - totalCardsW / 2;
-    const cardsY = panelTop + 88;
+    const cardsY = panelTop + 84;
 
     CHARACTERS.forEach((ch, i) => {
       const card = new Container();
@@ -1686,36 +1903,35 @@ export async function startGame(app: Application) {
       const focused = charSelectSection === "hero" && charFocus === i;
       const selected = charFocus === i;
       const g = new Graphics();
-      drawPanelFrame(g, cardW, cardH);
-      if (focused) {
-        g.rect(0, 0, cardW, cardH).stroke({ width: 4, color: UI.cardSelected });
-        g.rect(2, 2, cardW - 4, cardH - 4).fill({ color: UI.cardSelected, alpha: 0.06 });
-      } else if (selected) {
-        g.rect(0, 0, cardW, cardH).stroke({ width: 2, color: UI.cardSelectedGlow, alpha: 0.95 });
-        g.rect(2, 2, cardW - 4, cardH - 4).fill({ color: UI.cardSelected, alpha: 0.05 });
-      }
+      drawUpgradeCardBg(g, cardW, cardH, focused || selected, ch.accent);
       const preview = new Graphics();
-      preview.circle(cardW / 2, 58, 18).fill(ch.accent);
-      preview.roundRect(cardW / 2 - 10, 72, 20, 26, 2).fill(ch.color);
+      preview.circle(cardW / 2, 72, 22).fill(ch.accent);
+      preview.roundRect(cardW / 2 - 12, 88, 24, 32, 3).fill(ch.color);
       const name = new Text({
         text: ch.name,
-        style: { fill: UI.textPrimary, fontSize: 15, fontFamily: FONT, fontWeight: "bold" },
+        style: {
+          fill: UI.textPrimary,
+          fontSize: 17,
+          fontFamily: FONT,
+          fontWeight: "bold",
+          stroke: { color: 0x000000, width: focused ? 3 : 2 },
+        },
       });
       name.anchor.set(0.5);
-      name.position.set(cardW / 2, 118);
+      name.position.set(cardW / 2, 142);
       const tag = new Text({
         text: ch.tagline,
         style: {
           fill: UI.textMuted,
-          fontSize: 11,
+          fontSize: 12,
           fontFamily: FONT,
           wordWrap: true,
-          wordWrapWidth: 140,
+          wordWrapWidth: cardW - 28,
           align: "center",
         },
       });
       tag.anchor.set(0.5);
-      tag.position.set(cardW / 2, 152);
+      tag.position.set(cardW / 2, 182);
       card.addChild(g, preview, name, tag);
       if (selected) {
         const badge = new Graphics();
@@ -1735,11 +1951,11 @@ export async function startGame(app: Application) {
           },
         });
         label.anchor.set(0.5);
-        label.position.set(cardW / 2, cardH - 10);
+        label.position.set(cardW / 2, cardH - 12);
         card.addChild(badge, label);
       }
       setClickHitArea(card, cardW, cardH);
-      card.position.set(cardsStartX + i * cardW, cardsY);
+      card.position.set(cardsStartX + i * (cardW + cardGap), cardsY);
       card.on("pointertap", () => {
         charFocus = i;
         charSelectSection = "hero";
@@ -1748,12 +1964,12 @@ export async function startGame(app: Application) {
       c.addChild(card);
     });
 
-    const diffSectionY = cardsY + cardH + 28;
+    const diffSectionY = cardsY + cardH + 32;
     const diffLabel = new Text({
       text: "Select difficulty",
       style: {
         fill: charSelectSection === "difficulty" ? UI.cardSelectedGlow : UI.textMuted,
-        fontSize: 14,
+        fontSize: 15,
         fontFamily: FONT,
         letterSpacing: 2,
         fontWeight: "bold",
@@ -1763,11 +1979,17 @@ export async function startGame(app: Application) {
     diffLabel.position.set(w / 2, diffSectionY);
     c.addChild(diffLabel);
 
-    const diffBtnW = 148;
-    const diffGap = 14;
+    const diffBtnW = 196;
+    const diffBtnH = 90;
+    const diffGap = 18;
     const totalDiffW = DIFFICULTIES.length * diffBtnW + (DIFFICULTIES.length - 1) * diffGap;
     const diffStartX = w / 2 - totalDiffW / 2;
-    const diffBtnY = diffSectionY + 28;
+    const diffBtnY = diffSectionY + 32;
+    const diffAccent: Record<DifficultyId, number> = {
+      easy: 0x55dd77,
+      normal: UI.cardSelectedGlow,
+      hard: 0xff8866,
+    };
 
     DIFFICULTIES.forEach((diff, i) => {
       const btn = new Container();
@@ -1777,37 +1999,32 @@ export async function startGame(app: Application) {
         charSelectSection === "difficulty" && difficultyFocus === i;
       const chosen = activeDifficultyId === diff.id;
       const g = new Graphics();
-      drawPanelFrame(g, diffBtnW, 72);
-      if (focused) {
-        g.rect(0, 0, diffBtnW, 72).stroke({ width: 3, color: UI.cardSelected });
-      } else if (chosen) {
-        g.rect(0, 0, diffBtnW, 72).stroke({ width: 2, color: UI.cardSelectedGlow, alpha: 0.9 });
-        g.rect(2, 2, diffBtnW - 4, 72 - 4).fill({ color: UI.cardSelected, alpha: 0.08 });
-      }
+      drawUpgradeCardBg(g, diffBtnW, diffBtnH, focused || chosen, diffAccent[diff.id]);
       const name = new Text({
         text: diff.name,
         style: {
           fill: UI.textPrimary,
-          fontSize: 14,
+          fontSize: 16,
           fontFamily: FONT,
           fontWeight: "bold",
+          stroke: { color: 0x000000, width: focused ? 3 : 2 },
         },
       });
       name.anchor.set(0.5);
-      name.position.set(diffBtnW / 2, 24);
+      name.position.set(diffBtnW / 2, 28);
       const desc = new Text({
         text: diff.desc,
         style: {
           fill: UI.textDim,
-          fontSize: 9,
+          fontSize: 10,
           fontFamily: FONT,
           wordWrap: true,
-          wordWrapWidth: diffBtnW - 16,
+          wordWrapWidth: diffBtnW - 20,
           align: "center",
         },
       });
       desc.anchor.set(0.5);
-      desc.position.set(diffBtnW / 2, 50);
+      desc.position.set(diffBtnW / 2, 60);
       btn.addChild(g, name, desc);
       if (chosen) {
         const badge = new Graphics();
@@ -1818,7 +2035,7 @@ export async function startGame(app: Application) {
         });
         btn.addChild(badge);
       }
-      setClickHitArea(btn, diffBtnW, 72);
+      setClickHitArea(btn, diffBtnW, diffBtnH);
       btn.position.set(diffStartX + i * (diffBtnW + diffGap), diffBtnY);
       btn.on("pointertap", () => {
         difficultyFocus = i;
@@ -1829,11 +2046,89 @@ export async function startGame(app: Application) {
       c.addChild(btn);
     });
 
+    const mapSectionY = diffBtnY + diffBtnH + 28;
+    const mapLabel = new Text({
+      text: "Select map",
+      style: {
+        fill: charSelectSection === "map" ? UI.cardSelectedGlow : UI.textMuted,
+        fontSize: 15,
+        fontFamily: FONT,
+        letterSpacing: 2,
+        fontWeight: "bold",
+      },
+    });
+    mapLabel.anchor.set(0.5);
+    mapLabel.position.set(w / 2, mapSectionY);
+    c.addChild(mapLabel);
+
+    const mapCardW = 210;
+    const mapGap = 14;
+    const totalMapW = MAPS.length * mapCardW + (MAPS.length - 1) * mapGap;
+    const mapStartX = w / 2 - totalMapW / 2;
+    const mapCardY = mapSectionY + 30;
+    const mapPreviewH = 76;
+
+    MAPS.forEach((map, i) => {
+      const card = new Container();
+      card.eventMode = "static";
+      card.cursor = "pointer";
+      const focused = charSelectSection === "map" && mapFocus === i;
+      const chosen = activeMapId === map.id;
+      const cardH = mapPreviewH + 52;
+      const g = new Graphics();
+      drawUpgradeCardBg(g, mapCardW, cardH, focused || chosen, map.accentColor);
+      const preview = new Graphics();
+      drawMapPreview(preview, map, 10, 10, mapCardW - 20, mapPreviewH);
+      const name = new Text({
+        text: map.name,
+        style: {
+          fill: UI.textPrimary,
+          fontSize: 14,
+          fontFamily: FONT,
+          fontWeight: "bold",
+          stroke: { color: 0x000000, width: focused ? 3 : 2 },
+        },
+      });
+      name.anchor.set(0.5);
+      name.position.set(mapCardW / 2, mapPreviewH + 22);
+      const desc = new Text({
+        text: map.desc,
+        style: {
+          fill: UI.textDim,
+          fontSize: 10,
+          fontFamily: FONT,
+        },
+      });
+      desc.anchor.set(0.5);
+      desc.position.set(mapCardW / 2, mapPreviewH + 40);
+      card.addChild(g, preview, name, desc);
+      if (chosen) {
+        const badge = new Graphics();
+        badge.circle(mapCardW - 12, 12, 9).fill(UI.cardSelected);
+        badge.moveTo(mapCardW - 16, 12).lineTo(mapCardW - 13, 15).lineTo(mapCardW - 8, 9).stroke({
+          width: 2,
+          color: 0xffffff,
+        });
+        card.addChild(badge);
+      }
+      setClickHitArea(card, mapCardW, cardH);
+      card.position.set(mapStartX + i * (mapCardW + mapGap), mapCardY);
+      card.on("pointertap", () => {
+        mapFocus = i;
+        activeMapId = map.id;
+        charSelectSection = "map";
+        drawFloor();
+        layoutOverlay();
+      });
+      c.addChild(card);
+    });
+
     const selectedHero = CHARACTERS[charFocus];
     const selectedDiff = getDifficulty(activeDifficultyId);
-    const summaryY = diffBtnY + 86;
-    const summaryW = 460;
-    const summaryH = 40;
+    const selectedMap = getMap(activeMapId);
+    const summaryY = mapCardY + mapPreviewH + 52 + 28;
+    const summaryW = Math.min(760, panelW - 80);
+    const summaryH = 48;
     const summaryBox = new Graphics();
     drawPanelFrame(summaryBox, summaryW, summaryH);
     summaryBox.position.set(w / 2 - summaryW / 2, summaryY - summaryH / 2);
@@ -1844,11 +2139,16 @@ export async function startGame(app: Application) {
     heroDot.position.set(w / 2 - summaryW / 2 + 24, summaryY);
     c.addChild(heroDot);
 
+    const mapDot = new Graphics();
+    mapDot.circle(0, 0, 6).fill(selectedMap.accentColor);
+    mapDot.position.set(w / 2 - summaryW / 2 + 44, summaryY);
+    c.addChild(mapDot);
+
     const summary = new Text({
-      text: `Hero: ${selectedHero.name}   ·   Difficulty: ${selectedDiff.name}`,
+      text: `${selectedHero.name}   ·   ${selectedMap.name}   ·   ${selectedDiff.name}`,
       style: {
         fill: UI.textPrimary,
-        fontSize: 14,
+        fontSize: 16,
         fontFamily: FONT,
         fontWeight: "bold",
         letterSpacing: 1,
@@ -1858,11 +2158,14 @@ export async function startGame(app: Application) {
     summary.position.set(w / 2 + 8, summaryY);
     c.addChild(summary);
 
-    const actionY = diffBtnY + 128;
+    const actionY = summaryY + 52;
     const actionGap = 20;
     const done = menuBtn(
       "DONE",
-      () => startRun(CHARACTERS[charFocus].id),
+      () => {
+        drawFloor();
+        startRun(CHARACTERS[charFocus].id);
+      },
       charSelectSection === "actions" && charSelectActionFocus === 0,
     );
     const back = menuBtn(
@@ -1881,11 +2184,11 @@ export async function startGame(app: Application) {
     c.addChild(done, back);
 
     const hint = new Text({
-      text: "Pick hero & difficulty  ·  ↓ to Done  ·  ←→ Done/Back  ·  Enter start",
+      text: "Hero → Difficulty → Map → Done  ·  ↓↓ advance  ·  Enter start",
       style: { fill: UI.textDim, fontSize: 11, fontFamily: FONT },
     });
     hint.anchor.set(0.5);
-    hint.position.set(w / 2, panelTop + panelH - 22);
+    hint.position.set(w / 2, panelTop + panelH - 26);
     c.addChild(hint);
 
     return c;
@@ -1921,48 +2224,6 @@ export async function startGame(app: Application) {
     return c;
   }
 
-  function buildPauseMenu(w: number, h: number): Container {
-    const c = panelBg(w, h, 440, 380);
-    const title = new Text({
-      text: "Paused",
-      style: titleStyle,
-    });
-    title.anchor.set(0.5);
-    title.position.set(w / 2, h / 2 - 150);
-    c.addChild(title);
-
-    const stats = new Text({
-      text:
-        `${character.name}  ·  ${getActiveDifficulty().name}  ·  Lv ${playerLevel}  ·  Wave ${wave}\n` +
-        `${formatTime(gameTime)}  ·  ${kills} kills  ·  ${runGold} gold`,
-      style: bodyStyle,
-    });
-    stats.anchor.set(0.5);
-    stats.position.set(w / 2, h / 2 - 105);
-    c.addChild(stats);
-
-    const items = [
-      { label: "RESUME", action: resumeFromPause },
-      { label: "RESTART", action: restartFromPause },
-      { label: "MAIN MENU", action: quitToMainMenu },
-    ];
-    items.forEach((item, i) => {
-      const btn = menuBtn(item.label, item.action, pauseMenuFocus === i);
-      btn.position.set(w / 2 - 140, h / 2 - 30 + i * 72);
-      c.addChild(btn);
-    });
-
-    const hint = new Text({
-      text: "↑↓ navigate  ·  Enter select  ·  Esc resume",
-      style: { fill: UI.textDim, fontSize: 12, fontFamily: FONT },
-    });
-    hint.anchor.set(0.5);
-    hint.position.set(w / 2, h / 2 + 155);
-    c.addChild(hint);
-
-    return c;
-  }
-
   function handleMenuInput() {
     if (phase === "death") {
       if (input.pressed("Enter") || input.pressed("Space")) {
@@ -1994,11 +2255,21 @@ export async function startGame(app: Application) {
           shopFocus = 0;
         } else if (menuFocus === 2) {
           statsScroll = 0;
+          statsTab = "skills";
           phase = "statistics";
         } else phase = "help";
         layoutOverlay();
       }
     } else if (phase === "statistics") {
+      if (input.pressed("ArrowLeft") || input.pressed("KeyA")) {
+        cycleStatsTab(-1);
+      }
+      if (input.pressed("ArrowRight") || input.pressed("KeyD")) {
+        cycleStatsTab(1);
+      }
+      if (input.pressed("Digit1")) setStatsTab("skills");
+      if (input.pressed("Digit2")) setStatsTab("maps");
+      if (input.pressed("Digit3")) setStatsTab("enemies");
       if (input.pressed("ArrowUp") || input.pressed("KeyW")) {
         scrollStatistics(-50);
       }
@@ -2039,6 +2310,27 @@ export async function startGame(app: Application) {
           layoutOverlay();
         }
         if (input.pressed("ArrowDown") || input.pressed("KeyS")) {
+          charSelectSection = "map";
+          layoutOverlay();
+        }
+      } else if (charSelectSection === "map") {
+        if (input.pressed("ArrowLeft") || input.pressed("KeyA")) {
+          mapFocus = (mapFocus + MAPS.length - 1) % MAPS.length;
+          activeMapId = MAPS[mapFocus].id;
+          drawFloor();
+          layoutOverlay();
+        }
+        if (input.pressed("ArrowRight") || input.pressed("KeyD")) {
+          mapFocus = (mapFocus + 1) % MAPS.length;
+          activeMapId = MAPS[mapFocus].id;
+          drawFloor();
+          layoutOverlay();
+        }
+        if (input.pressed("ArrowUp") || input.pressed("KeyW")) {
+          charSelectSection = "difficulty";
+          layoutOverlay();
+        }
+        if (input.pressed("ArrowDown") || input.pressed("KeyS")) {
           charSelectSection = "actions";
           charSelectActionFocus = 0;
           layoutOverlay();
@@ -2053,11 +2345,12 @@ export async function startGame(app: Application) {
           layoutOverlay();
         }
         if (input.pressed("ArrowUp") || input.pressed("KeyW")) {
-          charSelectSection = "difficulty";
+          charSelectSection = "map";
           layoutOverlay();
         }
         if (input.pressed("Enter") || input.pressed("Space")) {
           if (charSelectActionFocus === 0) {
+            drawFloor();
             startRun(CHARACTERS[charFocus].id);
           } else {
             phase = "mainMenu";
@@ -2089,11 +2382,21 @@ export async function startGame(app: Application) {
         resumeFromPause();
         return;
       }
-      if (input.pressed("ArrowUp") || input.pressed("KeyW")) {
+      if (
+        input.pressed("ArrowLeft") ||
+        input.pressed("KeyA") ||
+        input.pressed("ArrowUp") ||
+        input.pressed("KeyW")
+      ) {
         pauseMenuFocus = (pauseMenuFocus + 2) % 3;
         layoutOverlay();
       }
-      if (input.pressed("ArrowDown") || input.pressed("KeyS")) {
+      if (
+        input.pressed("ArrowRight") ||
+        input.pressed("KeyD") ||
+        input.pressed("ArrowDown") ||
+        input.pressed("KeyS")
+      ) {
         pauseMenuFocus = (pauseMenuFocus + 1) % 3;
         layoutOverlay();
       }

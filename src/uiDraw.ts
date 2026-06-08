@@ -100,8 +100,10 @@ export function drawUpgradeCardBg(
     });
   }
 
+  const headerH = Math.min(54, Math.max(10, Math.round(height * 0.26)));
+
   g.rect(0, 0, width, height).fill(UI.cardBg);
-  g.rect(2, 2, width - 4, 54).fill({ color: accent, alpha: selected ? 0.14 : 0.07 });
+  g.rect(2, 2, width - 4, headerH).fill({ color: accent, alpha: selected ? 0.14 : 0.07 });
   g.rect(2, 2, width - 4, height - 4).fill(UI.cardInner);
 
   g.rect(10, 4, width - 20, 2).fill({
@@ -418,41 +420,17 @@ export function drawSkillSlotIcon(g: Graphics, ready: boolean): void {
   g.circle(0, 0, ready ? 8 : 6).fill(ready ? UI.textGreen : UI.textMuted);
 }
 
-const MENU_REF_W = 712;
-const MENU_REF_H = 152;
-const MENU_FRAME = 12;
+export const MENU_BUTTON_ACCENT = UI.cardSelectedGlow;
 
 export function drawMenuButtonBg(
   bg: Graphics,
   width: number,
   height: number,
   selected: boolean,
+  accent: number = MENU_BUTTON_ACCENT,
+  pulse = 0,
 ): void {
-  bg.clear();
-  const sx = width / MENU_REF_W;
-  const sy = height / MENU_REF_H;
-  const thickX = Math.max(2, MENU_FRAME * sx);
-  const thickY = Math.max(thickX, MENU_FRAME * sy);
-
-  bg.rect(0, 0, width, thickY).fill({ color: UI.menuBorderHi, alpha: 0.72 });
-  bg.rect(0, height - thickY, width, thickY).fill({ color: UI.menuBorder, alpha: 0.78 });
-  bg.rect(0, 0, thickX, height).fill({ color: UI.menuBorderHi, alpha: 0.65 });
-  bg.rect(width - thickX, 0, thickX, height).fill({ color: UI.menuBorder, alpha: 0.72 });
-  bg.rect(0, 0, width, height).stroke({ width: 2, color: UI.menuBorder, alpha: 0.88 });
-
-  if (!selected) return;
-
-  const inset = 5 * sx;
-  const armX = 33 * sx;
-  const armY = 33 * sy;
-  bg.rect(inset, inset, armX, thickY).fill(UI.menuSelected);
-  bg.rect(inset, inset, thickX, armY).fill(UI.menuSelected);
-  bg.rect(width - inset - armX, inset, armX, thickY).fill(UI.menuSelected);
-  bg.rect(width - inset - thickX, inset, thickX, armY).fill(UI.menuSelected);
-  bg.rect(inset, height - inset - thickY, armX, thickY).fill(UI.menuSelected);
-  bg.rect(inset, height - inset - armY, thickX, armY).fill(UI.menuSelected);
-  bg.rect(width - inset - armX, height - inset - thickY, armX, thickY).fill(UI.menuSelected);
-  bg.rect(width - inset - thickX, height - inset - armY, thickX, armY).fill(UI.menuSelected);
+  drawUpgradeCardBg(bg, width, height, selected, accent, pulse);
 }
 
 export function drawPanelFrame(g: Graphics, w: number, h: number): void {

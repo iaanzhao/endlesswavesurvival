@@ -161,11 +161,12 @@ export function buildDeathSummaryOverlay(
   const btnLabel = new Text({
     text: "DONE",
     style: {
-      fill: UI.menuText,
-      fontSize: 28,
+      fill: UI.textPrimary,
+      fontSize: 24,
       fontFamily: FONT,
       letterSpacing: 3,
       fontWeight: "bold",
+      stroke: { color: 0x000000, width: 3 },
     },
   });
   btnLabel.anchor.set(0.5);
