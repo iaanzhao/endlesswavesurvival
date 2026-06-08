@@ -2,6 +2,7 @@ import {
   Application,
   Container,
   Graphics,
+  Rectangle,
   Text,
   type Ticker,
 } from "pixi.js";
@@ -178,7 +179,8 @@ export async function startGame(app: Application) {
   let phase: Phase = "mainMenu";
   let charFocus = 0;
   let difficultyFocus = 1;
-  let charSelectSection: "hero" | "difficulty" = "hero";
+  let charSelectSection: "hero" | "difficulty" | "actions" = "hero";
+  let charSelectActionFocus = 0;
   let activeDifficultyId: DifficultyId = "normal";
   let menuFocus = 0;
   let statsScroll = 0;
@@ -1583,6 +1585,7 @@ export async function startGame(app: Application) {
       () => {
         charSelectSection = "hero";
         charFocus = 0;
+        charSelectActionFocus = 0;
         phase = "characterSelect";
         layoutOverlay();
       },
@@ -1648,10 +1651,15 @@ export async function startGame(app: Application) {
       card.eventMode = "static";
       card.cursor = "pointer";
       const focused = charSelectSection === "hero" && charFocus === i;
+      const selected = charFocus === i;
       const g = new Graphics();
       drawPanelFrame(g, cardW, cardH);
       if (focused) {
         g.rect(0, 0, cardW, cardH).stroke({ width: 4, color: UI.cardSelected });
+        g.rect(2, 2, cardW - 4, cardH - 4).fill({ color: UI.cardSelected, alpha: 0.06 });
+      } else if (selected) {
+        g.rect(0, 0, cardW, cardH).stroke({ width: 2, color: UI.cardSelectedGlow, alpha: 0.95 });
+        g.rect(2, 2, cardW - 4, cardH - 4).fill({ color: UI.cardSelected, alpha: 0.05 });
       }
       const preview = new Graphics();
       preview.circle(cardW / 2, 58, 18).fill(ch.accent);
@@ -1676,11 +1684,33 @@ export async function startGame(app: Application) {
       tag.anchor.set(0.5);
       tag.position.set(cardW / 2, 152);
       card.addChild(g, preview, name, tag);
+      if (selected) {
+        const badge = new Graphics();
+        badge.circle(cardW - 14, 14, 11).fill(UI.cardSelected);
+        badge.moveTo(cardW - 19, 14).lineTo(cardW - 15, 18).lineTo(cardW - 8, 10).stroke({
+          width: 2,
+          color: 0xffffff,
+        });
+        const label = new Text({
+          text: "SELECTED",
+          style: {
+            fill: UI.cardSelectedGlow,
+            fontSize: 9,
+            fontFamily: FONT,
+            fontWeight: "bold",
+            letterSpacing: 1,
+          },
+        });
+        label.anchor.set(0.5);
+        label.position.set(cardW / 2, cardH - 10);
+        card.addChild(badge, label);
+      }
       setClickHitArea(card, cardW, cardH);
       card.position.set(cardsStartX + i * cardW, cardsY);
       card.on("pointertap", () => {
         charFocus = i;
-        startRun(ch.id);
+        charSelectSection = "hero";
+        layoutOverlay();
       });
       c.addChild(card);
     });
@@ -1710,15 +1740,16 @@ export async function startGame(app: Application) {
       const btn = new Container();
       btn.eventMode = "static";
       btn.cursor = "pointer";
-      const selected =
+      const focused =
         charSelectSection === "difficulty" && difficultyFocus === i;
-      const active = activeDifficultyId === diff.id;
+      const chosen = activeDifficultyId === diff.id;
       const g = new Graphics();
       drawPanelFrame(g, diffBtnW, 72);
-      if (selected) {
+      if (focused) {
         g.rect(0, 0, diffBtnW, 72).stroke({ width: 3, color: UI.cardSelected });
-      } else if (active) {
-        g.rect(0, 0, diffBtnW, 72).stroke({ width: 2, color: UI.cardBorderHi, alpha: 0.8 });
+      } else if (chosen) {
+        g.rect(0, 0, diffBtnW, 72).stroke({ width: 2, color: UI.cardSelectedGlow, alpha: 0.9 });
+        g.rect(2, 2, diffBtnW - 4, 72 - 4).fill({ color: UI.cardSelected, alpha: 0.08 });
       }
       const name = new Text({
         text: diff.name,
@@ -1745,6 +1776,15 @@ export async function startGame(app: Application) {
       desc.anchor.set(0.5);
       desc.position.set(diffBtnW / 2, 50);
       btn.addChild(g, name, desc);
+      if (chosen) {
+        const badge = new Graphics();
+        badge.circle(diffBtnW - 12, 12, 9).fill(UI.cardSelected);
+        badge.moveTo(diffBtnW - 16, 12).lineTo(diffBtnW - 13, 15).lineTo(diffBtnW - 8, 9).stroke({
+          width: 2,
+          color: 0xffffff,
+        });
+        btn.addChild(badge);
+      }
       setClickHitArea(btn, diffBtnW, 72);
       btn.position.set(diffStartX + i * (diffBtnW + diffGap), diffBtnY);
       btn.on("pointertap", () => {
@@ -1756,15 +1796,59 @@ export async function startGame(app: Application) {
       c.addChild(btn);
     });
 
-    const back = menuBtn("BACK", () => {
-      phase = "mainMenu";
-      layoutOverlay();
+    const selectedHero = CHARACTERS[charFocus];
+    const selectedDiff = getDifficulty(activeDifficultyId);
+    const summaryY = diffBtnY + 86;
+    const summaryW = 460;
+    const summaryH = 40;
+    const summaryBox = new Graphics();
+    drawPanelFrame(summaryBox, summaryW, summaryH);
+    summaryBox.position.set(w / 2 - summaryW / 2, summaryY - summaryH / 2);
+    c.addChild(summaryBox);
+
+    const heroDot = new Graphics();
+    heroDot.circle(0, 0, 6).fill(selectedHero.accent);
+    heroDot.position.set(w / 2 - summaryW / 2 + 24, summaryY);
+    c.addChild(heroDot);
+
+    const summary = new Text({
+      text: `Hero: ${selectedHero.name}   ·   Difficulty: ${selectedDiff.name}`,
+      style: {
+        fill: UI.textPrimary,
+        fontSize: 14,
+        fontFamily: FONT,
+        fontWeight: "bold",
+        letterSpacing: 1,
+      },
     });
-    back.position.set(w / 2 - 140, diffBtnY + 108);
-    c.addChild(back);
+    summary.anchor.set(0.5);
+    summary.position.set(w / 2 + 8, summaryY);
+    c.addChild(summary);
+
+    const actionY = diffBtnY + 128;
+    const actionGap = 20;
+    const done = menuBtn(
+      "DONE",
+      () => startRun(CHARACTERS[charFocus].id),
+      charSelectSection === "actions" && charSelectActionFocus === 0,
+    );
+    const back = menuBtn(
+      "BACK",
+      () => {
+        phase = "mainMenu";
+        layoutOverlay();
+      },
+      charSelectSection === "actions" && charSelectActionFocus === 1,
+    );
+    const doneW = (done.hitArea as Rectangle).width;
+    const backW = (back.hitArea as Rectangle).width;
+    const actionRowW = doneW + actionGap + backW;
+    done.position.set(w / 2 - actionRowW / 2, actionY);
+    back.position.set(w / 2 - actionRowW / 2 + doneW + actionGap, actionY);
+    c.addChild(done, back);
 
     const hint = new Text({
-      text: "↑↓ hero / difficulty  ·  ←→ select  ·  Enter start",
+      text: "Pick hero & difficulty  ·  ↓ to Done  ·  ←→ Done/Back  ·  Enter start",
       style: { fill: UI.textDim, fontSize: 11, fontFamily: FONT },
     });
     hint.anchor.set(0.5);
@@ -1983,7 +2067,7 @@ export async function startGame(app: Application) {
           charSelectSection = "difficulty";
           layoutOverlay();
         }
-      } else {
+      } else if (charSelectSection === "difficulty") {
         if (input.pressed("ArrowLeft") || input.pressed("KeyA")) {
           difficultyFocus = (difficultyFocus + DIFFICULTIES.length - 1) % DIFFICULTIES.length;
           activeDifficultyId = DIFFICULTIES[difficultyFocus].id;
@@ -1998,9 +2082,32 @@ export async function startGame(app: Application) {
           charSelectSection = "hero";
           layoutOverlay();
         }
-      }
-      if (input.pressed("Enter") || input.pressed("Space")) {
-        startRun(CHARACTERS[charFocus].id);
+        if (input.pressed("ArrowDown") || input.pressed("KeyS")) {
+          charSelectSection = "actions";
+          charSelectActionFocus = 0;
+          layoutOverlay();
+        }
+      } else {
+        if (input.pressed("ArrowLeft") || input.pressed("KeyA")) {
+          charSelectActionFocus = 0;
+          layoutOverlay();
+        }
+        if (input.pressed("ArrowRight") || input.pressed("KeyD")) {
+          charSelectActionFocus = 1;
+          layoutOverlay();
+        }
+        if (input.pressed("ArrowUp") || input.pressed("KeyW")) {
+          charSelectSection = "difficulty";
+          layoutOverlay();
+        }
+        if (input.pressed("Enter") || input.pressed("Space")) {
+          if (charSelectActionFocus === 0) {
+            startRun(CHARACTERS[charFocus].id);
+          } else {
+            phase = "mainMenu";
+            layoutOverlay();
+          }
+        }
       }
       if (input.pressed("Escape")) {
         phase = "mainMenu";
