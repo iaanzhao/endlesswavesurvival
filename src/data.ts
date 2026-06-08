@@ -468,6 +468,12 @@ export interface SaveData {
   unlockedShop: Record<ShopItemId, boolean>;
 }
 
+export function defaultRunShopBuffs(): Record<ShopItemId, boolean> {
+  return Object.fromEntries(
+    SHOP_ITEMS.map((s) => [s.id, false]),
+  ) as Record<ShopItemId, boolean>;
+}
+
 export function defaultSave(): SaveData {
   const shopOwned = Object.fromEntries(
     SHOP_ITEMS.map((s) => [s.id, false]),
@@ -587,28 +593,28 @@ export interface AppliedStats {
 export function computeStats(
   character: CharacterDef,
   levels: Partial<Record<UpgradeId, number>>,
-  shopActive: SaveData["shopActive"],
+  runShopBuffs: Record<ShopItemId, boolean>,
 ): AppliedStats {
   const lv = (id: UpgradeId) => levels[id] ?? 0;
   return {
     maxHp:
       character.maxHp +
       lv("vitality") * 15 +
-      (shopActive.health_potion ? 30 : 0),
+      (runShopBuffs.health_potion ? 30 : 0),
     regen: lv("recovery") * 0.4,
     armor:
-      Math.min(0.75, lv("armor") * 0.05 + (shopActive.armor_charm ? 0.1 : 0)),
+      Math.min(0.75, lv("armor") * 0.05 + (runShopBuffs.armor_charm ? 0.1 : 0)),
     speed:
       character.speed *
-      (1 + lv("haste") * 0.08 + (shopActive.speed_boots ? 0.1 : 0)),
+      (1 + lv("haste") * 0.08 + (runShopBuffs.speed_boots ? 0.1 : 0)),
     damageMult:
-      (1 + lv("might") * 0.12) * (shopActive.damage_tonic ? 1.15 : 1),
+      (1 + lv("might") * 0.12) * (runShopBuffs.damage_tonic ? 1.15 : 1),
     attackRateMult: 1 + lv("swift_strike") * 0.1,
     multishot: 1 + lv("multishot"),
     pierce: lv("pierce"),
     areaMult: 1 + lv("area") * 0.15,
     magnet: 60 + lv("magnet") * 40,
-    xpMult: (1 + lv("wisdom") * 0.12) * (shopActive.xp_scroll ? 1.2 : 1),
+    xpMult: (1 + lv("wisdom") * 0.12) * (runShopBuffs.xp_scroll ? 1.2 : 1),
     critChance: lv("crit") * 0.06,
     cooldownMult: Math.max(0.35, 1 - lv("cooldown") * 0.08),
   };

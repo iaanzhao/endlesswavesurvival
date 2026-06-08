@@ -12,6 +12,7 @@ import {
   SHOP_ITEMS,
   UPGRADES,
   computeStats,
+  defaultRunShopBuffs,
   DIFFICULTIES,
   getCharacter,
   getDifficulty,
@@ -25,6 +26,7 @@ import {
   type CharacterId,
   type DifficultyId,
   type EnemyKind,
+  type ShopItemId,
   type UpgradeId,
 } from "./data";
 import { Input, dist, formatTime, loadSave, pickRandom, saveGame, setClickHitArea } from "./util";
@@ -59,6 +61,7 @@ import {
   buildStatisticsPanel,
   STATS_SCROLL_MAX,
 } from "./uiStatistics";
+import { buildShopPanel } from "./uiShop";
 import {
   getOrbiterConfig,
   OrbiterSystem,
@@ -187,6 +190,7 @@ export async function startGame(app: Application) {
   let deathSummaryActive = false;
   let lastDeathStats: DeathScreenStats | null = null;
   let shopFocus = 0;
+  let runShopBuffs = defaultRunShopBuffs();
   let pauseMenuFocus = 0;
   let activeCharacterId: CharacterId = "mage";
   let levelUpChoices: UpgradeId[] = [];
@@ -219,7 +223,7 @@ export async function startGame(app: Application) {
   let upgradeLevels: Partial<Record<UpgradeId, number>> = {};
 
   let character: CharacterDef = getCharacter("mage");
-  let stats: AppliedStats = computeStats(character, upgradeLevels, save.shopActive);
+  let stats: AppliedStats = computeStats(character, upgradeLevels, runShopBuffs);
 
   const playerGfx = new Container();
   const playerBody = new Graphics();
@@ -496,8 +500,8 @@ export async function startGame(app: Application) {
     activeCharacterId = charId;
     character = getCharacter(charId);
     upgradeLevels = {};
-    stats = computeStats(character, upgradeLevels, save.shopActive);
-    reviveLeft = save.shopActive.revive_token ? 1 : 0;
+    stats = computeStats(character, upgradeLevels, runShopBuffs);
+    reviveLeft = runShopBuffs.revive_token ? 1 : 0;
     playerX = 0;
     playerY = 0;
     playerHp = stats.maxHp;
@@ -1093,7 +1097,7 @@ export async function startGame(app: Application) {
   function applyUpgrade(id: UpgradeId) {
     const prev = upgradeLevels[id] ?? 0;
     upgradeLevels[id] = prev + 1;
-    stats = computeStats(character, upgradeLevels, save.shopActive);
+    stats = computeStats(character, upgradeLevels, runShopBuffs);
     playerHp = Math.min(stats.maxHp, playerHp);
     if (
       prev === 0 &&
@@ -1164,8 +1168,23 @@ export async function startGame(app: Application) {
     };
   }
 
+  function clearRunShopBuffs() {
+    runShopBuffs = defaultRunShopBuffs();
+  }
+
+  function buyShopItem(id: ShopItemId) {
+    const item = SHOP_ITEMS.find((s) => s.id === id);
+    if (!item || !save.unlockedShop[id] || runShopBuffs[id]) return;
+    if (save.totalGold < item.cost) return;
+    save.totalGold -= item.cost;
+    runShopBuffs[id] = true;
+    saveGame(save);
+    layoutOverlay();
+  }
+
   function finishDeathAndGoHome() {
     lastDeathStats = getDeathStats();
+    clearRunShopBuffs();
     clearEntities();
     phase = "mainMenu";
     deathSummaryActive = true;
@@ -1515,7 +1534,21 @@ export async function startGame(app: Application) {
     } else if (phase === "help") {
       overlay.addChild(buildHelp(w, h));
     } else if (phase === "shop") {
-      overlay.addChild(buildShopPanel(w, h));
+      overlay.addChild(
+        buildShopPanel(
+          w,
+          h,
+          save.totalGold,
+          save.unlockedShop,
+          runShopBuffs,
+          shopFocus,
+          buyShopItem,
+          () => {
+            phase = "mainMenu";
+            layoutOverlay();
+          },
+        ),
+      );
     } else if (phase === "death") {
       overlay.addChild(
         buildDeathScreen(w, h, getDeathStats(), finishDeathAndGoHome),
@@ -1869,7 +1902,8 @@ export async function startGame(app: Application) {
         "Auto-attack and skills fire automatically.\n" +
         "Some upgrades unlock bonus skills (orbit, meteor, thunder, heal).\n" +
         "Collect XP gems to level up and pick upgrades.\n" +
-        "Collect gold to buy permanent shop buffs.\n" +
+        "Collect gold to buy one-time shop buffs before each run.\n" +
+        "Shop buffs are lost when you die — buy again next time.\n" +
         "All upgrades stack — build the strongest combo!\n\n" +
         "Mage — area magic  |  Knight — melee tank\n" +
         "Rogue — speed & crit  |  Archer — ranged kiting",
@@ -1883,84 +1917,6 @@ export async function startGame(app: Application) {
       layoutOverlay();
     });
     back.position.set(w / 2 - 140, h / 2 + 180);
-    c.addChild(back);
-    return c;
-  }
-
-  function buildShopPanel(w: number, h: number): Container {
-    const c = panelBg(w, h, 640, 500);
-    const title = new Text({
-      text: "Shop",
-      style: titleStyle,
-    });
-    title.anchor.set(0.5);
-    title.position.set(w / 2, h / 2 - 210);
-    const coinLabel = new Text({
-      text: `Your gold: ${save.totalGold}`,
-      style: {
-        fill: UI.coin,
-        fontSize: 18,
-        fontFamily: FONT,
-        fontWeight: "bold",
-        stroke: { color: 0x000000, width: 3 },
-      },
-    });
-    coinLabel.anchor.set(0.5);
-    coinLabel.position.set(w / 2, h / 2 - 175);
-    c.addChild(title, coinLabel);
-
-    SHOP_ITEMS.forEach((item, i) => {
-      const unlocked = save.unlockedShop[item.id];
-      const owned = save.shopOwned[item.id];
-      const active = save.shopActive[item.id];
-      const row = new Container();
-      const focused = shopFocus === i;
-      const g = new Graphics();
-      drawPanelFrame(g, 560, 40);
-      if (focused) {
-        g.rect(0, 0, 560, 40).stroke({ width: 3, color: UI.cardSelected });
-      }
-      const label = unlocked
-        ? `${item.name} — ${item.desc}  [${owned ? (active ? "ON" : "OFF") : `${item.cost}g`}]`
-        : `${item.name} — locked (collect ${item.unlockGold} lifetime gold)`;
-      const t = new Text({
-        text: label,
-        style: {
-          fill: unlocked ? UI.textPrimary : UI.textDim,
-          fontSize: 13,
-          fontFamily: FONT,
-        },
-      });
-      t.anchor.set(0, 0.5);
-      t.position.set(12, 20);
-      row.addChild(g, t);
-      setClickHitArea(row, 560, 40);
-      row.position.set(w / 2 - 280, h / 2 - 140 + i * 52);
-      row.eventMode = "static";
-      row.cursor = unlocked ? "pointer" : "default";
-      row.on("pointertap", () => {
-        if (!unlocked) return;
-        if (!save.shopOwned[item.id]) {
-          if (save.totalGold >= item.cost) {
-            save.totalGold -= item.cost;
-            save.shopOwned[item.id] = true;
-            save.shopActive[item.id] = true;
-            saveGame(save);
-          }
-        } else {
-          save.shopActive[item.id] = !save.shopActive[item.id];
-          saveGame(save);
-        }
-        layoutOverlay();
-      });
-      c.addChild(row);
-    });
-
-    const back = menuBtn("BACK", () => {
-      phase = "mainMenu";
-      layoutOverlay();
-    });
-    back.position.set(w / 2 - 140, h / 2 + 210);
     c.addChild(back);
     return c;
   }
@@ -2146,37 +2102,26 @@ export async function startGame(app: Application) {
         else if (pauseMenuFocus === 1) restartFromPause();
         else quitToMainMenu();
       }
-    } else if (phase === "shop" || phase === "help") {
+    } else if (phase === "help") {
       if (input.pressed("Escape") || input.pressed("Enter")) {
         phase = "mainMenu";
         layoutOverlay();
       }
-      if (phase === "shop") {
-        if (input.pressed("ArrowUp") || input.pressed("KeyW")) {
-          shopFocus = (shopFocus + SHOP_ITEMS.length - 1) % SHOP_ITEMS.length;
-          layoutOverlay();
-        }
-        if (input.pressed("ArrowDown") || input.pressed("KeyS")) {
-          shopFocus = (shopFocus + 1) % SHOP_ITEMS.length;
-          layoutOverlay();
-        }
-        if (input.pressed("Enter") || input.pressed("Space")) {
-          const item = SHOP_ITEMS[shopFocus];
-          if (save.unlockedShop[item.id]) {
-            if (!save.shopOwned[item.id]) {
-              if (save.totalGold >= item.cost) {
-                save.totalGold -= item.cost;
-                save.shopOwned[item.id] = true;
-                save.shopActive[item.id] = true;
-                saveGame(save);
-              }
-            } else {
-              save.shopActive[item.id] = !save.shopActive[item.id];
-              saveGame(save);
-            }
-            layoutOverlay();
-          }
-        }
+    } else if (phase === "shop") {
+      if (input.pressed("Escape")) {
+        phase = "mainMenu";
+        layoutOverlay();
+      }
+      if (input.pressed("ArrowUp") || input.pressed("KeyW")) {
+        shopFocus = (shopFocus + SHOP_ITEMS.length - 1) % SHOP_ITEMS.length;
+        layoutOverlay();
+      }
+      if (input.pressed("ArrowDown") || input.pressed("KeyS")) {
+        shopFocus = (shopFocus + 1) % SHOP_ITEMS.length;
+        layoutOverlay();
+      }
+      if (input.pressed("Enter") || input.pressed("Space")) {
+        buyShopItem(SHOP_ITEMS[shopFocus].id);
       }
     }
   }
