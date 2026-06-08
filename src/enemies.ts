@@ -842,6 +842,13 @@ export function getEnemyRadius(kind: EnemyKind): number {
   return ENEMY_HIT_RADIUS[kind];
 }
 
+/** Scale an in-game enemy graphic to fit a square HUD / UI icon slot. */
+export function scaleEnemyForStatIcon(kind: EnemyKind, boxSize: number): number {
+  const targetPx = boxSize * 0.76;
+  const approxDiameter = getEnemyRadius(kind) * 2.15 * 2;
+  return targetPx / approxDiameter;
+}
+
 export function getEnemyMaxHp(kind: EnemyKind): number {
   return ENEMY_HP[kind];
 }

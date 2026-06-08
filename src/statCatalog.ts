@@ -7,6 +7,13 @@ import {
   type MapId,
 } from "./data";
 import { SKILL_COOLDOWNS } from "./bonusSkills";
+import {
+  CRYSTAL_BUFF,
+  FISSURE_BURST,
+  RIFT_CONFIG,
+  TERRAIN_INTERACT,
+  type InteractiveTerrainKind,
+} from "./mapTerrain";
 import type { StatIconId } from "./uiDraw";
 
 export interface SkillStatEntry {
@@ -187,19 +194,19 @@ export interface MapStatEntry {
 const MAP_META: Record<MapId, { terrain: string; extra: string }> = {
   graveyard: {
     terrain: "Tombstones · rocks · dead trees",
-    extra: "44 obstacles spread across the full arena",
+    extra: "44 obstacles · heavier skeleton & undead spawns",
   },
   ember: {
-    terrain: "Lava rocks · obsidian pillars · warp fissures",
-    extra: "38 obstacles + 10 warp fissures across the map",
+    terrain: "Lava rocks · obsidian pillars · nova fissures",
+    extra: "5 fissures · nova-burst enemies every 5s",
   },
   frost: {
     terrain: "Ice pillars · snow boulders · heal crystals",
-    extra: "38 obstacles + 10 heal crystals across the map",
+    extra: "Crystals: +5 HP · 2× speed · +10% attack speed (3s)",
   },
   void: {
     terrain: "Void monoliths · shadow rocks · blink rifts",
-    extra: "38 obstacles + 10 blink rifts across the map",
+    extra: "4 active rifts · both vanish on blink · respawn after 8s",
   },
 };
 
@@ -309,12 +316,61 @@ export const ENEMY_STAT_ENTRIES: EnemyStatEntry[] = ENEMY_STAT_ORDER.map((kind) 
   };
 });
 
-export type StatTab = "skills" | "maps" | "enemies";
+export interface TerrainStatEntry {
+  kind: InteractiveTerrainKind;
+  name: string;
+  mapName: string;
+  accentColor: number;
+  desc: string;
+  activation: string;
+  cooldown: string;
+  effect: string;
+  extra?: string;
+}
+
+export const TERRAIN_STAT_ENTRIES: TerrainStatEntry[] = [
+  {
+    kind: "fissure",
+    name: "Lava Fissure",
+    mapName: "Ember Fields",
+    accentColor: 0xff6622,
+    desc: TERRAIN_INTERACT.fissure.desc,
+    activation: "Passive — always active",
+    cooldown: `${FISSURE_BURST.interval}s between bursts`,
+    effect: `${FISSURE_BURST.damage} dmg to enemies · ${FISSURE_BURST.radius} radius`,
+    extra: "Enemies only · 5 fissures per map",
+  },
+  {
+    kind: "crystal",
+    name: "Frost Crystal",
+    mapName: "Frost Ruins",
+    accentColor: 0x88ccff,
+    desc: TERRAIN_INTERACT.crystal.desc,
+    activation: `Walk within ${TERRAIN_INTERACT.crystal.triggerRadius} units`,
+    cooldown: `${TERRAIN_INTERACT.crystal.cooldown}s per crystal`,
+    effect: `+${CRYSTAL_BUFF.heal} HP · ${CRYSTAL_BUFF.speedMult}× speed · +${Math.round((CRYSTAL_BUFF.attackRateMult - 1) * 100)}% attack speed (${CRYSTAL_BUFF.duration}s)`,
+    extra: "10 crystals spread across the map",
+  },
+  {
+    kind: "rift",
+    name: "Void Rift",
+    mapName: "Void Chasm",
+    accentColor: 0xaa66ff,
+    desc: TERRAIN_INTERACT.rift.desc,
+    activation: `Walk within ${TERRAIN_INTERACT.rift.triggerRadius} units`,
+    cooldown: `${TERRAIN_INTERACT.rift.cooldown}s per rift`,
+    effect: "Blink to a random other active rift",
+    extra: `${RIFT_CONFIG.activeCount} rifts at once · both vanish · respawn after ${RIFT_CONFIG.respawnDelay}s`,
+  },
+];
+
+export type StatTab = "skills" | "maps" | "enemies" | "terrain";
 
 export const STAT_TABS: { id: StatTab; label: string }[] = [
   { id: "skills", label: "Skills" },
   { id: "maps", label: "Maps" },
   { id: "enemies", label: "Enemies" },
+  { id: "terrain", label: "Terrain" },
 ];
 
 export function getStatEntryCount(tab: StatTab): number {
@@ -325,5 +381,7 @@ export function getStatEntryCount(tab: StatTab): number {
       return MAP_STAT_ENTRIES.length;
     case "enemies":
       return ENEMY_STAT_ENTRIES.length;
+    case "terrain":
+      return TERRAIN_STAT_ENTRIES.length;
   }
 }

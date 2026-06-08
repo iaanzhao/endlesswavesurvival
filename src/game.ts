@@ -64,18 +64,25 @@ import {
   buildStatisticsPanel,
   getStatScrollMax,
 } from "./uiStatistics";
-import type { StatTab } from "./statCatalog";
+import { STAT_TABS, type StatTab } from "./statCatalog";
 import { buildShopPanel } from "./uiShop";
 import { buildPauseMenu } from "./uiPauseMenu";
 import { drawMapPreview } from "./uiMapPreview";
 import {
   buildMapTerrainStatic,
+  createVoidRiftFeatures,
+  CRYSTAL_BUFF,
   findTerrainPartners,
+  FISSURE_BURST,
   getMapTerrain,
   isInteractiveTerrain,
+  isRiftActive,
+  relocateRift,
   refreshInteractiveTerrain,
   resolveTerrainCollision,
+  RIFT_CONFIG,
   TERRAIN_INTERACT,
+  VOID_RIFT_SPAWN_SEED,
   type TerrainFeature,
 } from "./mapTerrain";
 import {
@@ -198,6 +205,9 @@ export async function startGame(app: Application) {
   terrain.addChild(terrainStatic, terrainInteractive);
   let terrainFeatures: TerrainFeature[] = getMapTerrain("graveyard");
   let terrainCooldowns: number[] = [];
+  let terrainFissureBurstTimers: number[] = [];
+  let riftRespawnTimers: number[] = [];
+  let riftRespawnSeed = VOID_RIFT_SPAWN_SEED + 200;
   let terrainAnimTime = 0;
   let terrainSpeedTimer = 0;
   const vignette = new Graphics();
@@ -422,6 +432,12 @@ export async function startGame(app: Application) {
     floor.clear();
     const map = getActiveMap();
     terrainFeatures = getMapTerrain(activeMapId);
+    if (activeMapId === "void") {
+      terrainFeatures = [
+        ...terrainFeatures,
+        ...createVoidRiftFeatures(terrainFeatures, VOID_RIFT_SPAWN_SEED),
+      ];
+    }
     const tile = 64;
     for (let x = -ARENA; x <= ARENA; x += tile) {
       for (let y = -ARENA; y <= ARENA; y += tile) {
@@ -432,6 +448,11 @@ export async function startGame(app: Application) {
     floor.circle(0, 0, ARENA).stroke({ width: 6, color: map.borderColor, alpha: 0.6 });
     floor.circle(0, 0, ARENA - 4).stroke({ width: 2, color: map.accentColor, alpha: 0.25 });
     terrainCooldowns = terrainFeatures.map(() => 0);
+    terrainFissureBurstTimers = terrainFeatures.map((f, i) =>
+      f.kind === "fissure" ? FISSURE_BURST.interval * (0.25 + (i % 7) * 0.1) : 0,
+    );
+    riftRespawnTimers = terrainFeatures.map((f) => (f.kind === "rift" ? 0 : -1));
+    riftRespawnSeed = VOID_RIFT_SPAWN_SEED + 200;
     terrainAnimTime = 0;
     terrainSpeedTimer = 0;
     buildMapTerrainStatic(terrainStatic, map, terrainFeatures);
@@ -460,7 +481,7 @@ export async function startGame(app: Application) {
 
   function triggerTerrainWarp(
     fromIdx: number,
-    kind: "fissure" | "rift",
+    kind: "rift",
     color: number,
     label: string,
     iframe: number,
@@ -471,7 +492,6 @@ export async function startGame(app: Application) {
     const from = terrainFeatures[fromIdx];
     const destIdx = partners[Math.floor(Math.random() * partners.length)];
     const dest = terrainFeatures[destIdx];
-    const def = TERRAIN_INTERACT[kind];
 
     addTransientFx(spawnNovaFx(from.x, from.y, 52, color, 0.45));
     playerX = dest.x;
@@ -487,8 +507,10 @@ export async function startGame(app: Application) {
     }
     spawnFloatingLabel(dest.x, dest.y - 28, label, color);
 
-    terrainCooldowns[fromIdx] = def.cooldown;
-    terrainCooldowns[destIdx] = def.cooldown * 0.6;
+    terrainFeatures[fromIdx].riftDormant = true;
+    riftRespawnTimers[fromIdx] = RIFT_CONFIG.respawnDelay;
+    terrainFeatures[destIdx].riftDormant = true;
+    riftRespawnTimers[destIdx] = RIFT_CONFIG.respawnDelay;
   }
 
   function tickTerrainInteractions() {
@@ -500,18 +522,18 @@ export async function startGame(app: Application) {
       const def = TERRAIN_INTERACT[f.kind];
       if (dist(playerX, playerY, f.x, f.y) > def.triggerRadius) continue;
 
+      if (f.kind === "fissure") continue;
+      if (f.kind === "rift" && !isRiftActive(f)) continue;
+
       if (f.kind === "crystal") {
-        const heal = 18;
         const before = playerHp;
-        playerHp = Math.min(stats.maxHp, playerHp + heal);
+        playerHp = Math.min(stats.maxHp, playerHp + CRYSTAL_BUFF.heal);
         const actual = playerHp - before;
         if (actual > 0) spawnFloatingNumber(playerX, playerY - 24, actual, "heal");
-        terrainSpeedTimer = 2.8;
-        spawnFloatingLabel(playerX, playerY - 42, "SPEED UP", 0x88ddff);
+        terrainSpeedTimer = CRYSTAL_BUFF.duration;
+        spawnFloatingLabel(playerX, playerY - 42, "CRYSTAL BUFF", 0x88ddff);
         addTransientFx(spawnHealAuraFx(playerX, playerY, 48));
         terrainCooldowns[i] = def.cooldown;
-      } else if (f.kind === "fissure") {
-        triggerTerrainWarp(i, "fissure", 0xff6622, "WARP", 0.35);
       } else if (f.kind === "rift") {
         triggerTerrainWarp(i, "rift", 0xaa66ff, "BLINK", 0.55);
       }
@@ -521,6 +543,45 @@ export async function startGame(app: Application) {
 
   function mapHasInteractiveTerrain(): boolean {
     return terrainFeatures.some((f) => isInteractiveTerrain(f.kind));
+  }
+
+  function tickRiftRespawns(dt: number) {
+    for (let i = 0; i < terrainFeatures.length; i++) {
+      const f = terrainFeatures[i];
+      if (f.kind !== "rift" || !f.riftDormant) continue;
+      if (riftRespawnTimers[i] <= 0) continue;
+
+      riftRespawnTimers[i] -= dt;
+      if (riftRespawnTimers[i] > 0) continue;
+
+      const seed = riftRespawnSeed;
+      riftRespawnSeed += 997;
+      if (relocateRift(terrainFeatures, i, seed)) {
+        addTransientFx(spawnNovaFx(f.x, f.y, 64, 0xaa66ff, 0.55));
+        addTransientFx(spawnSmokeFx(f.x, f.y));
+      } else {
+        riftRespawnTimers[i] = 0.5;
+      }
+    }
+  }
+
+  function tickFissureBursts(dt: number) {
+    for (let i = 0; i < terrainFeatures.length; i++) {
+      const f = terrainFeatures[i];
+      if (f.kind !== "fissure") continue;
+
+      terrainFissureBurstTimers[i] -= dt;
+      if (terrainFissureBurstTimers[i] > 0) continue;
+
+      terrainFissureBurstTimers[i] = FISSURE_BURST.interval;
+      addTransientFx(spawnNovaFx(f.x, f.y, FISSURE_BURST.radius, 0xff6622));
+      for (const e of enemies) {
+        if (!isEnemyActive(e)) continue;
+        if (dist(f.x, f.y, e.x, e.y) < FISSURE_BURST.radius) {
+          damageEnemy(e, FISSURE_BURST.damage);
+        }
+      }
+    }
   }
 
   function tickTerrainSystems(dt: number) {
@@ -533,6 +594,8 @@ export async function startGame(app: Application) {
         terrainCooldowns[i] = Math.max(0, terrainCooldowns[i] - dt);
       }
     }
+    tickFissureBursts(dt);
+    tickRiftRespawns(dt);
     tickTerrainInteractions();
     refreshTerrainVisuals();
   }
@@ -1411,7 +1474,9 @@ export async function startGame(app: Application) {
       playerY += dashVy * dt;
     } else {
       const move = input.moveVector();
-      const speed = smokeTimer > 0 ? stats.speed * 1.35 : stats.speed;
+      let speed = stats.speed;
+      if (smokeTimer > 0) speed *= 1.35;
+      if (terrainSpeedTimer > 0) speed *= CRYSTAL_BUFF.speedMult;
       playerX += move.x * speed * dt;
       playerY += move.y * speed * dt;
     }
@@ -1437,7 +1502,10 @@ export async function startGame(app: Application) {
     attackTimer -= dt;
     if (attackTimer <= 0) {
       if (autoAttack()) {
-        attackTimer = 1 / (character.attackRate * stats.attackRateMult);
+        const attackMult =
+          stats.attackRateMult *
+          (terrainSpeedTimer > 0 ? CRYSTAL_BUFF.attackRateMult : 1);
+        attackTimer = 1 / (character.attackRate * attackMult);
       } else {
         attackTimer = 0.12;
       }
@@ -1447,7 +1515,7 @@ export async function startGame(app: Application) {
     if (spawnTimer <= 0) {
       const diff = getActiveDifficulty();
       const batch = spawnBatchForWave(wave, diff);
-      for (let i = 0; i < batch; i++) addEnemy(pickWeightedEnemy(wave));
+      for (let i = 0; i < batch; i++) addEnemy(pickWeightedEnemy(wave, activeMapId));
       spawnTimer = spawnIntervalForWave(wave, diff);
     }
 
@@ -1640,6 +1708,7 @@ export async function startGame(app: Application) {
   }
 
   function updateHudDisplay() {
+    const hudVisible = phase === "playing" || phase === "levelUp" || phase === "paused";
     hud.update({
       hp: playerHp,
       maxHp: stats.maxHp,
@@ -1650,7 +1719,20 @@ export async function startGame(app: Application) {
       time: formatTime(gameTime),
       gold: runGold,
       skills: buildHudSkills(),
-      visible: phase === "playing" || phase === "levelUp" || phase === "paused",
+      minimap: hudVisible
+        ? {
+            map: getActiveMap(),
+            playerX,
+            playerY,
+            enemies: enemies
+              .filter((e) => isEnemyActive(e))
+              .map((e) => ({ x: e.x, y: e.y })),
+            terrain: terrainFeatures,
+            viewW: app.screen.width,
+            viewH: app.screen.height,
+          }
+        : null,
+      visible: hudVisible,
     });
   }
 
@@ -1683,7 +1765,7 @@ export async function startGame(app: Application) {
   }
 
   function cycleStatsTab(dir: 1 | -1) {
-    const tabs: StatTab[] = ["skills", "maps", "enemies"];
+    const tabs = STAT_TABS.map((t) => t.id);
     const idx = tabs.indexOf(statsTab);
     setStatsTab(tabs[(idx + dir + tabs.length) % tabs.length]);
   }
@@ -2270,6 +2352,7 @@ export async function startGame(app: Application) {
       if (input.pressed("Digit1")) setStatsTab("skills");
       if (input.pressed("Digit2")) setStatsTab("maps");
       if (input.pressed("Digit3")) setStatsTab("enemies");
+      if (input.pressed("Digit4")) setStatsTab("terrain");
       if (input.pressed("ArrowUp") || input.pressed("KeyW")) {
         scrollStatistics(-50);
       }

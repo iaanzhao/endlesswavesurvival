@@ -26,25 +26,44 @@ export interface TerrainInteractDef {
   desc: string;
 }
 
+export const FISSURE_BURST = {
+  interval: 5,
+  radius: 120,
+  damage: 32,
+};
+
+export const CRYSTAL_BUFF = {
+  heal: 5,
+  speedMult: 2,
+  attackRateMult: 1.1,
+  duration: 3,
+};
+
 export const TERRAIN_INTERACT: Record<InteractiveTerrainKind, TerrainInteractDef> = {
   fissure: {
-    triggerRadius: 44,
-    cooldown: 4,
-    label: "Warp",
-    desc: "Teleport to another fissure",
+    triggerRadius: 0,
+    cooldown: 0,
+    label: "Nova",
+    desc: "Periodically damages nearby foes",
   },
   crystal: {
     triggerRadius: 38,
     cooldown: 9,
     label: "Restore",
-    desc: "Heal + brief speed boost",
+    desc: "+5 HP · +100% speed · +10% attack speed",
   },
   rift: {
     triggerRadius: 50,
     cooldown: 3.5,
     label: "Blink",
-    desc: "Blink to another rift · brief i-frames",
+    desc: "Blink to another rift · vanishes and respawns elsewhere",
   },
+};
+
+export const RIFT_CONFIG = {
+  activeCount: 4,
+  respawnDelay: 8,
+  spawnMinSpacing: 280,
 };
 
 export interface TerrainFeature {
@@ -57,6 +76,8 @@ export interface TerrainFeature {
   rot?: number;
   /** Decorative only — no collision. Default true when omitted. */
   blocking?: boolean;
+  /** Void rifts: hidden and inactive while respawning. */
+  riftDormant?: boolean;
 }
 
 export function isInteractiveTerrain(kind: TerrainKind): kind is InteractiveTerrainKind {
@@ -71,6 +92,10 @@ export function getInteractiveFeatures(features: TerrainFeature[]): number[] {
   return out;
 }
 
+export function isRiftActive(f: TerrainFeature): boolean {
+  return f.kind === "rift" && !f.riftDormant;
+}
+
 export function findTerrainPartners(
   features: TerrainFeature[],
   index: number,
@@ -78,9 +103,82 @@ export function findTerrainPartners(
 ): number[] {
   const partners: number[] = [];
   features.forEach((f, i) => {
-    if (i !== index && f.kind === kind) partners.push(i);
+    if (i !== index && f.kind === kind) {
+      if (kind === "rift" && !isRiftActive(f)) return;
+      partners.push(i);
+    }
   });
   return partners;
+}
+
+function collectRiftAvoidPoints(
+  features: TerrainFeature[],
+  skipIndex = -1,
+): { x: number; y: number; minDist: number }[] {
+  const avoid: { x: number; y: number; minDist: number }[] = [];
+  for (const f of features) {
+    if (isBlocking(f)) {
+      avoid.push({ x: f.x, y: f.y, minDist: f.radius + 100 });
+    }
+  }
+  features.forEach((f, i) => {
+    if (i === skipIndex || f.kind !== "rift" || f.riftDormant) return;
+    avoid.push({ x: f.x, y: f.y, minDist: RIFT_CONFIG.spawnMinSpacing });
+  });
+  return avoid;
+}
+
+export function findRiftSpawnPosition(
+  features: TerrainFeature[],
+  seed: number,
+  skipIndex = -1,
+): { x: number; y: number } | null {
+  const rng = mulberry32(seed);
+  const avoid = collectRiftAvoidPoints(features, skipIndex);
+  for (let attempt = 0; attempt < 140; attempt++) {
+    const angle = rng() * Math.PI * 2;
+    const r = ARENA_INNER + rng() * (ARENA_OUTER - ARENA_INNER);
+    const x = Math.cos(angle) * r;
+    const y = Math.sin(angle) * r;
+    if (Math.hypot(x, y) < CENTER_CLEAR) continue;
+    if (avoid.some((p) => Math.hypot(p.x - x, p.y - y) < p.minDist)) continue;
+    return { x, y };
+  }
+  return null;
+}
+
+export function createVoidRiftFeatures(
+  features: TerrainFeature[],
+  seed: number,
+  count = RIFT_CONFIG.activeCount,
+): TerrainFeature[] {
+  const rng = mulberry32(seed);
+  const rifts: TerrainFeature[] = [];
+  const working = [...features];
+  for (let i = 0; i < count; i++) {
+    const pos = findRiftSpawnPosition(working, seed + i * 31);
+    if (!pos) continue;
+    const rift = interactiveAt(pos.x, pos.y, "rift", rng);
+    rifts.push(rift);
+    working.push(rift);
+  }
+  return rifts;
+}
+
+export function relocateRift(
+  features: TerrainFeature[],
+  index: number,
+  seed: number,
+): boolean {
+  const f = features[index];
+  if (f.kind !== "rift") return false;
+  const pos = findRiftSpawnPosition(features, seed, index);
+  if (!pos) return false;
+  f.x = pos.x;
+  f.y = pos.y;
+  f.rot = mulberry32(seed + 17)() * Math.PI * 2;
+  f.riftDormant = false;
+  return true;
 }
 
 const CENTER_CLEAR = 220;
@@ -246,7 +344,7 @@ function buildGraveyardTerrain(): TerrainFeature[] {
 function buildEmberTerrain(): TerrainFeature[] {
   const rng = mulberry32(MAP_SEED.ember);
   const blockingPos = scatterArenaPositions(MAP_SEED.ember, 38, BLOCK_MIN_SPACING);
-  const interactPos = scatterArenaPositions(MAP_SEED.ember + 91, 10, INTERACT_MIN_SPACING);
+  const interactPos = scatterArenaPositions(MAP_SEED.ember + 91, 5, INTERACT_MIN_SPACING);
   return [
     ...blockingPos.map((p) => emberBlockingAt(p.x, p.y, rng)),
     ...interactPos.map((p) => interactiveAt(p.x, p.y, "fissure", rng)),
@@ -266,11 +364,15 @@ function buildFrostTerrain(): TerrainFeature[] {
 function buildVoidTerrain(): TerrainFeature[] {
   const rng = mulberry32(MAP_SEED.void);
   const blockingPos = scatterArenaPositions(MAP_SEED.void, 38, BLOCK_MIN_SPACING);
-  const interactPos = scatterArenaPositions(MAP_SEED.void + 91, 10, INTERACT_MIN_SPACING);
-  return [
-    ...blockingPos.map((p) => voidBlockingAt(p.x, p.y, rng)),
-    ...interactPos.map((p) => interactiveAt(p.x, p.y, "rift", rng)),
-  ];
+  return blockingPos.map((p) => voidBlockingAt(p.x, p.y, rng));
+}
+
+export const VOID_RIFT_SPAWN_SEED = MAP_SEED.void + 77;
+
+export function getMapTerrainForPreview(mapId: MapId): TerrainFeature[] {
+  const base = TERRAIN_BY_MAP[mapId];
+  if (mapId !== "void") return base;
+  return [...base, ...createVoidRiftFeatures(base, VOID_RIFT_SPAWN_SEED)];
 }
 
 const TERRAIN_BY_MAP: Record<MapId, TerrainFeature[]> = {
@@ -348,20 +450,84 @@ function drawObsidian(g: Graphics, f: TerrainFeature): void {
   g.rect(-w / 2 + 4, -h / 2 + 4, 4, h - 12).fill({ color: 0xff6622, alpha: 0.35 });
 }
 
-function drawFissure(g: Graphics, pulse = 0): void {
-  const len = 90;
-  const glow = 0.35 + pulse * 0.35;
-  g.circle(0, 0, 38).stroke({ width: 2, color: 0xff6622, alpha: glow * 0.45 });
-  g.moveTo(-len / 2, 0)
-    .lineTo(-len / 4, -4)
-    .lineTo(0, 2)
-    .lineTo(len / 4, -3)
-    .lineTo(len / 2, 0)
-    .stroke({ width: 3, color: 0xff4422, alpha: 0.55 + pulse * 0.25 });
-  g.moveTo(-len / 2, 2)
-    .lineTo(len / 2, 2)
-    .stroke({ width: 6, color: 0xffaa44, alpha: 0.15 + pulse * 0.2 });
-  g.circle(0, 0, 6 + pulse * 4).fill({ color: 0xffaa44, alpha: 0.35 + pulse * 0.3 });
+function drawCrackBranch(
+  g: Graphics,
+  x1: number,
+  y1: number,
+  x2: number,
+  y2: number,
+  color: number,
+  width: number,
+  alpha: number,
+): void {
+  const mx = (x1 + x2) / 2 + (y2 - y1) * 0.12;
+  const my = (y1 + y2) / 2 - (x2 - x1) * 0.12;
+  g.moveTo(x1, y1).lineTo(mx, my).lineTo(x2, y2).stroke({ width, color, alpha });
+}
+
+function drawFissure(g: Graphics, pulse = 0, time = 0, onCooldown = false): void {
+  const ready = 0.35 + pulse * 0.65;
+  const dim = onCooldown ? 0.38 : 1;
+
+  g.ellipse(0, 4, 52, 22).fill({ color: 0x1a0804, alpha: 0.55 * dim });
+  g.ellipse(0, 2, 44, 16).fill({ color: 0x331108, alpha: 0.35 * dim });
+
+  const ripple = 1 + Math.sin(time * 2.4) * 0.08;
+  g.circle(0, 0, (46 + pulse * 10) * ripple).stroke({
+    width: 2,
+    color: 0xff6622,
+    alpha: ready * 0.22 * dim,
+  });
+  g.circle(0, 0, (34 + pulse * 6) * (1 + Math.sin(time * 3.1 + 1) * 0.06)).stroke({
+    width: 1.5,
+    color: 0xffaa44,
+    alpha: ready * 0.3 * dim,
+  });
+
+  const len = 96;
+  const branches: [number, number, number, number][] = [
+    [-len / 2, 0, len / 2, 0],
+    [-len / 3, -2, -len / 6, -22],
+    [len / 6, 2, len / 3, 20],
+    [-8, 0, -28, 14],
+    [10, 0, 32, -16],
+    [0, 0, 18, 24],
+    [0, 0, -16, -20],
+  ];
+  for (const [x1, y1, x2, y2] of branches) {
+    drawCrackBranch(g, x1, y1, x2, y2, 0x2a0a04, 5, 0.45 * dim);
+    drawCrackBranch(g, x1, y1, x2, y2, 0xff4422, 2.5, (0.45 + pulse * 0.35) * dim);
+  }
+
+  g.moveTo(-len / 2, 1)
+    .lineTo(-len / 4, -5)
+    .lineTo(0, 3)
+    .lineTo(len / 4, -4)
+    .lineTo(len / 2, 1)
+    .stroke({ width: 7, color: 0xffaa44, alpha: (0.12 + pulse * 0.22) * dim });
+  g.moveTo(-len / 2, 1)
+    .lineTo(-len / 4, -5)
+    .lineTo(0, 3)
+    .lineTo(len / 4, -4)
+    .lineTo(len / 2, 1)
+    .stroke({ width: 2.5, color: 0xffee88, alpha: (0.35 + pulse * 0.45) * dim });
+
+  const coreR = 8 + pulse * 6 + Math.sin(time * 4.5) * 2;
+  g.circle(0, 0, coreR + 6).fill({ color: 0xff6622, alpha: (0.12 + pulse * 0.18) * dim });
+  g.circle(0, 0, coreR).fill({ color: 0xffaa44, alpha: (0.45 + pulse * 0.4) * dim });
+  g.circle(0, 0, coreR * 0.45).fill({ color: 0xffffcc, alpha: (0.55 + pulse * 0.35) * dim });
+
+  for (let i = 0; i < 6; i++) {
+    const a = time * 1.8 + (i * Math.PI * 2) / 6;
+    const orbit = 22 + Math.sin(time * 3 + i) * 4;
+    const ex = Math.cos(a) * orbit;
+    const ey = Math.sin(a) * orbit * 0.55;
+    const spark = 0.35 + 0.65 * Math.max(0, Math.sin(time * 5 + i * 1.7));
+    g.circle(ex, ey, 2 + spark).fill({
+      color: i % 2 === 0 ? 0xff6622 : 0xffee88,
+      alpha: spark * ready * dim,
+    });
+  }
 }
 
 function drawIcePillar(g: Graphics, f: TerrainFeature): void {
@@ -371,12 +537,93 @@ function drawIcePillar(g: Graphics, f: TerrainFeature): void {
   g.moveTo(0, -h / 2 + 4).lineTo(w / 2 - 4, h / 2).lineTo(-w / 2 + 4, h / 2).closePath().fill(0xcceeff);
 }
 
-function drawCrystal(g: Graphics, pulse = 0): void {
-  const glow = 0.3 + pulse * 0.4;
-  g.circle(0, 0, 30).stroke({ width: 2, color: 0x88ccff, alpha: glow * 0.5 });
-  g.moveTo(0, -14).lineTo(8, 6).lineTo(0, 14).lineTo(-8, 6).closePath().fill(0x88ccff);
-  g.moveTo(0, -10).lineTo(5, 4).lineTo(0, 10).lineTo(-5, 4).closePath().fill(0xccffff);
-  g.circle(0, 0, 4 + pulse * 3).fill({ color: 0xffffff, alpha: 0.4 + pulse * 0.35 });
+function drawCrystalShard(
+  g: Graphics,
+  ox: number,
+  oy: number,
+  rot: number,
+  h: number,
+  w: number,
+  base: number,
+  hi: number,
+  alpha: number,
+): void {
+  const cos = Math.cos(rot);
+  const sin = Math.sin(rot);
+  const pts = [
+    [0, -h],
+    [w, h * 0.35],
+    [0, h],
+    [-w, h * 0.35],
+  ] as const;
+  const mapped = pts.map(([px, py]) => [ox + px * cos - py * sin, oy + px * sin + py * cos]);
+  g.moveTo(mapped[0][0], mapped[0][1])
+    .lineTo(mapped[1][0], mapped[1][1])
+    .lineTo(mapped[2][0], mapped[2][1])
+    .lineTo(mapped[3][0], mapped[3][1])
+    .closePath()
+    .fill({ color: base, alpha });
+  g.moveTo(mapped[0][0], mapped[0][1])
+    .lineTo(mapped[1][0], mapped[1][1])
+    .lineTo(mapped[2][0], mapped[2][1])
+    .lineTo(mapped[3][0], mapped[3][1])
+    .closePath()
+    .stroke({ width: 1, color: hi, alpha: alpha * 0.7 });
+}
+
+function drawCrystal(g: Graphics, pulse = 0, time = 0, onCooldown = false): void {
+  const ready = 0.35 + pulse * 0.65;
+  const dim = onCooldown ? 0.4 : 1;
+  const shimmer = 0.5 + 0.5 * Math.sin(time * 3.4);
+
+  g.circle(0, 6, 34).fill({ color: 0x1a3048, alpha: 0.35 * dim });
+  g.circle(0, 0, 38 + pulse * 6).stroke({
+    width: 2,
+    color: 0x88ccff,
+    alpha: ready * 0.28 * dim,
+  });
+  g.circle(0, 0, 28 + pulse * 4).stroke({
+    width: 1,
+    color: 0xccffff,
+    alpha: ready * 0.2 * dim,
+  });
+
+  for (let i = 0; i < 8; i++) {
+    const a = (i / 8) * Math.PI * 2 + time * 0.7;
+    const r = 30 + Math.sin(time * 2.2 + i) * 3;
+    const sx = Math.cos(a) * r;
+    const sy = Math.sin(a) * r;
+    const spark = 0.25 + 0.75 * Math.max(0, Math.sin(time * 4 + i * 0.9));
+    g.circle(sx, sy, 1.5 + spark * 1.2).fill({
+      color: 0xffffff,
+      alpha: spark * ready * 0.7 * dim,
+    });
+  }
+
+  drawCrystalShard(g, -6, 2, -0.2, 16, 7, 0x5588aa, 0x88bbdd, 0.85 * dim);
+  drawCrystalShard(g, 8, 0, 0.35, 14, 6, 0x6699bb, 0xaaddff, 0.9 * dim);
+  drawCrystalShard(g, 0, -4, 0, 18, 8, 0x88ccff, 0xccffff, 0.95 * dim);
+
+  const facetA = time * 1.2;
+  g.moveTo(0, -18)
+    .lineTo(Math.cos(facetA) * 10, Math.sin(facetA) * 6 - 4)
+    .stroke({ width: 2, color: 0xffffff, alpha: shimmer * ready * 0.45 * dim });
+  g.moveTo(0, -18)
+    .lineTo(Math.cos(facetA + 2.1) * 12, Math.sin(facetA + 2.1) * 8)
+    .stroke({ width: 1.5, color: 0xccffff, alpha: shimmer * ready * 0.35 * dim });
+
+  const coreR = 5 + pulse * 4 + Math.sin(time * 5) * 1.5;
+  g.circle(0, -2, coreR + 5).fill({ color: 0x66aadd, alpha: (0.15 + pulse * 0.2) * dim });
+  g.circle(0, -2, coreR).fill({ color: 0xccffff, alpha: (0.5 + pulse * 0.4) * dim });
+  g.circle(0, -2, coreR * 0.4).fill({ color: 0xffffff, alpha: (0.65 + pulse * 0.3) * dim });
+
+  for (let i = 0; i < 4; i++) {
+    const a = time * 0.9 + (i * Math.PI) / 2;
+    const ix = Math.cos(a) * 14;
+    const iy = Math.sin(a) * 8 + 8;
+    g.moveTo(ix, iy).lineTo(ix + Math.cos(a) * 6, iy + Math.sin(a) * 6)
+      .stroke({ width: 1.5, color: 0xaaddff, alpha: ready * 0.35 * dim });
+  }
 }
 
 function drawVoidMonolith(g: Graphics, f: TerrainFeature): void {
@@ -387,13 +634,97 @@ function drawVoidMonolith(g: Graphics, f: TerrainFeature): void {
   g.rect(-w / 2 + 4, -h / 2 + 6, w - 8, 3).fill({ color: 0xaa66ff, alpha: 0.5 });
 }
 
-function drawRift(g: Graphics, pulse = 0): void {
-  const len = 100;
-  const glow = 0.35 + pulse * 0.35;
-  g.ellipse(0, 0, len / 2 + 6 + pulse * 6, 14).fill({ color: 0xaa66ff, alpha: glow * 0.12 });
-  g.ellipse(0, 0, len / 2, 8).fill({ color: 0x220033, alpha: 0.7 });
-  g.ellipse(0, 0, len / 2 - 8, 4).fill({ color: 0xaa66ff, alpha: 0.35 + pulse * 0.25 });
-  g.circle(0, 0, 5 + pulse * 4).fill({ color: 0xdd99ff, alpha: 0.5 + pulse * 0.3 });
+function drawRiftArc(
+  g: Graphics,
+  rx: number,
+  ry: number,
+  start: number,
+  end: number,
+  color: number,
+  width: number,
+  alpha: number,
+): void {
+  const steps = 14;
+  for (let i = 0; i < steps; i++) {
+    const t0 = start + ((end - start) * i) / steps;
+    const t1 = start + ((end - start) * (i + 1)) / steps;
+    const x0 = Math.cos(t0) * rx;
+    const y0 = Math.sin(t0) * ry;
+    const x1 = Math.cos(t1) * rx;
+    const y1 = Math.sin(t1) * ry;
+    g.moveTo(x0, y0).lineTo(x1, y1).stroke({ width, color, alpha });
+  }
+}
+
+function drawRift(g: Graphics, pulse = 0, time = 0, onCooldown = false): void {
+  const ready = 0.35 + pulse * 0.65;
+  const dim = onCooldown ? 0.38 : 1;
+  const len = 108;
+  const wobble = Math.sin(time * 2.8) * 2;
+
+  g.ellipse(0, 2, len / 2 + 14, 20).fill({ color: 0x0a0018, alpha: 0.5 * dim });
+  g.ellipse(0, 0, len / 2 + 8 + pulse * 8 + wobble, 16).fill({
+    color: 0xaa66ff,
+    alpha: ready * 0.1 * dim,
+  });
+
+  for (let ring = 0; ring < 3; ring++) {
+    const phase = time * (1.6 + ring * 0.4) + ring * 1.4;
+    const rx = len / 2 - ring * 10 + Math.sin(phase) * 3;
+    const ry = 12 - ring * 2;
+    drawRiftArc(
+      g,
+      rx,
+      ry,
+      phase,
+      phase + Math.PI * 0.85,
+      ring === 0 ? 0xdd99ff : ring === 1 ? 0xaa66ff : 0x66ccff,
+      2 - ring * 0.4,
+      (0.2 + pulse * 0.25) * (1 - ring * 0.2) * dim,
+    );
+  }
+
+  g.ellipse(0, 0, len / 2, 9).fill({ color: 0x110022, alpha: 0.85 * dim });
+  g.ellipse(0, 0, len / 2 - 10, 5).fill({
+    color: 0x440066,
+    alpha: (0.45 + pulse * 0.3) * dim,
+  });
+  g.ellipse(0, 0, len / 2 - 18, 2.5).fill({
+    color: 0xaa66ff,
+    alpha: (0.55 + pulse * 0.35) * dim,
+  });
+
+  const coreR = 6 + pulse * 5 + Math.sin(time * 4.2) * 2;
+  g.circle(0, 0, coreR + 8).fill({ color: 0x6600aa, alpha: (0.15 + pulse * 0.2) * dim });
+  g.circle(0, 0, coreR).fill({ color: 0x220033, alpha: 0.9 * dim });
+  g.circle(0, 0, coreR * 0.55).fill({ color: 0xdd99ff, alpha: (0.55 + pulse * 0.4) * dim });
+  g.circle(0, 0, coreR * 0.2).fill({ color: 0xffffff, alpha: (0.35 + pulse * 0.45) * dim });
+
+  for (let i = 0; i < 7; i++) {
+    const a = time * 2.2 + (i * Math.PI * 2) / 7;
+    const orbitX = Math.cos(a) * (len / 2 - 4);
+    const orbitY = Math.sin(a) * 10;
+    const wisp = 0.3 + 0.7 * Math.max(0, Math.sin(time * 5.5 + i));
+    g.circle(orbitX, orbitY, 2 + wisp * 2).fill({
+      color: i % 3 === 0 ? 0x66ccff : 0xdd99ff,
+      alpha: wisp * ready * dim,
+    });
+    if (wisp > 0.6) {
+      const tx = orbitX - Math.cos(a) * 8;
+      const ty = orbitY - Math.sin(a) * 4;
+      g.moveTo(orbitX, orbitY).lineTo(tx, ty).stroke({
+        width: 1.5,
+        color: 0xaa66ff,
+        alpha: wisp * 0.35 * dim,
+      });
+    }
+  }
+
+  g.ellipse(0, 0, len / 2 + 4 + pulse * 6, 13).stroke({
+    width: 1.5,
+    color: 0xcc88ff,
+    alpha: ready * 0.35 * dim,
+  });
 }
 
 function interactPulse(
@@ -411,6 +742,8 @@ function drawTerrainFeature(
   f: TerrainFeature,
   map: MapDef,
   pulse = 0,
+  time = 0,
+  onCooldown = false,
 ): void {
   g.position.set(f.x, f.y);
   if (f.rot) g.rotation = f.rot;
@@ -432,7 +765,7 @@ function drawTerrainFeature(
       drawObsidian(g, f);
       break;
     case "fissure":
-      drawFissure(g, pulse);
+      drawFissure(g, pulse, time, onCooldown);
       break;
     case "icePillar":
       drawIcePillar(g, f);
@@ -441,7 +774,7 @@ function drawTerrainFeature(
       drawRock(g, 0x6688aa, 0xaaccee, f.radius);
       break;
     case "crystal":
-      drawCrystal(g, pulse);
+      drawCrystal(g, pulse, time, onCooldown);
       break;
     case "voidMonolith":
       drawVoidMonolith(g, f);
@@ -450,7 +783,7 @@ function drawTerrainFeature(
       drawRock(g, 0x3a2850, 0x6644aa, f.radius);
       break;
     case "rift":
-      drawRift(g, pulse);
+      drawRift(g, pulse, time, onCooldown);
       break;
   }
 
@@ -495,9 +828,11 @@ export function refreshInteractiveTerrain(
   destroyContainerChildren(container);
   features.forEach((f, i) => {
     if (!isInteractiveTerrain(f.kind)) return;
+    if (f.kind === "rift" && f.riftDormant) return;
     const piece = new Graphics();
-    const pulse = interactPulse(f.kind, cooldowns[i] ?? 0, time);
-    drawTerrainFeature(piece, f, map, pulse);
+    const cd = cooldowns[i] ?? 0;
+    const pulse = interactPulse(f.kind, cd, time);
+    drawTerrainFeature(piece, f, map, pulse, time, cd > 0);
     container.addChild(piece);
   });
 }
@@ -524,7 +859,11 @@ export function drawMapTerrainPreview(
     if (!inside) continue;
 
     if (isInteractiveTerrain(f.kind)) {
-      g.circle(px, py, 3.5).fill({ color: map.accentColor, alpha: 0.75 });
+      const accent =
+        f.kind === "fissure" ? 0xff6622 : f.kind === "crystal" ? 0x88ccff : 0xaa66ff;
+      g.circle(px, py, 5).fill({ color: accent, alpha: 0.15 });
+      g.circle(px, py, 2.5).fill({ color: accent, alpha: 0.85 });
+      g.circle(px, py, 1).fill({ color: 0xffffff, alpha: 0.6 });
       continue;
     }
     if (f.blocking === false || f.radius === 0) {

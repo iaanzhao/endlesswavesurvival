@@ -1,5 +1,6 @@
 import { Container, Graphics, Text } from "pixi.js";
 import { drawBar, drawCoinIcon, drawSkillSlotIcon } from "./uiDraw";
+import { drawMinimap, MINIMAP_SIZE, type MinimapUpdate } from "./uiMinimap";
 import { FONT, UI } from "./uiTheme";
 
 export interface HudSkillSlot {
@@ -22,6 +23,7 @@ export interface GameHud {
     time: string;
     gold: number;
     skills: HudSkillSlot[];
+    minimap?: MinimapUpdate | null;
     visible: boolean;
   }): void;
 }
@@ -34,6 +36,7 @@ export function createGameHud(): GameHud {
   root.visible = false;
 
   const bars = new Graphics();
+  const minimapGfx = new Graphics();
   const hpLabel = new Text({
     text: "100/100",
     style: { fill: UI.textPrimary, fontSize: 12, fontFamily: FONT },
@@ -126,6 +129,7 @@ export function createGameHud(): GameHud {
     lvlText,
     timerText,
     waveText,
+    minimapGfx,
     coinWrap,
     versionText,
     skillsRoot,
@@ -145,7 +149,8 @@ export function createGameHud(): GameHud {
       lvlText.position.set(16, 50);
       timerText.position.set(w / 2, 10);
       waveText.position.set(w / 2, 38);
-      coinWrap.position.set(w - 72, 14);
+      minimapGfx.position.set(w - MINIMAP_SIZE - 12, 10);
+      coinWrap.position.set(w - MINIMAP_SIZE - 12, MINIMAP_SIZE + 18);
       versionText.position.set(12, h - 22);
     },
     update(opts) {
@@ -165,6 +170,14 @@ export function createGameHud(): GameHud {
       timerText.text = opts.time;
       waveText.text = `Wave ${opts.wave}`;
       coinText.text = String(opts.gold);
+
+      if (opts.minimap) {
+        minimapGfx.visible = true;
+        drawMinimap(minimapGfx, opts.minimap);
+      } else {
+        minimapGfx.visible = false;
+        minimapGfx.clear();
+      }
 
       const count = opts.skills.length;
       const totalW = count * SLOT_SIZE;

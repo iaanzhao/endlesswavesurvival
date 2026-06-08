@@ -1,6 +1,6 @@
 import { Graphics } from "pixi.js";
 import type { MapDef, MapId } from "./data";
-import { drawMapTerrainPreview, getMapTerrain } from "./mapTerrain";
+import { drawMapTerrainPreview, getMapTerrainForPreview } from "./mapTerrain";
 
 function drawMapDecor(g: Graphics, mapId: MapId, cx: number, cy: number, r: number): void {
   switch (mapId) {
@@ -79,6 +79,6 @@ export function drawMapPreview(
 
   g.circle(cx, cy, r).stroke({ width: 3, color: map.borderColor, alpha: 0.85 });
   g.circle(cx, cy, r - 2).stroke({ width: 1, color: map.accentColor, alpha: 0.35 });
-  drawMapTerrainPreview(g, map, getMapTerrain(map.id), x, y, w, h);
+  drawMapTerrainPreview(g, map, getMapTerrainForPreview(map.id), x, y, w, h);
   drawMapDecor(g, map.id, cx, cy, r);
 }

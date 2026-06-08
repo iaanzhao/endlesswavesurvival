@@ -1,14 +1,21 @@
 import { Container, Graphics, Text, type FederatedWheelEvent } from "pixi.js";
 import {
+  createEnemyGraphic,
+  scaleEnemyForStatIcon,
+  updateEnemyAnimation,
+} from "./enemies";
+import {
   ENEMY_STAT_ENTRIES,
   MAP_STAT_ENTRIES,
   SKILL_STAT_ENTRIES,
   STAT_TABS,
+  TERRAIN_STAT_ENTRIES,
   getStatEntryCount,
   type EnemyStatEntry,
   type MapStatEntry,
   type SkillStatEntry,
   type StatTab,
+  type TerrainStatEntry,
 } from "./statCatalog";
 import { getMap } from "./data";
 import { drawMapPreview } from "./uiMapPreview";
@@ -172,34 +179,6 @@ function drawMapStatRow(
   }
 }
 
-function drawEnemyStatIcon(g: Graphics, entry: EnemyStatEntry, cx: number, cy: number): void {
-  g.clear();
-  g.circle(cx, cy, 15).fill({ color: entry.accent, alpha: 0.35 });
-  g.circle(cx, cy, 11).fill(entry.accent);
-  g.circle(cx - 3, cy - 3, 4).fill({ color: 0xffffff, alpha: 0.25 });
-  switch (entry.kind) {
-    case "bat":
-      g.moveTo(cx - 10, cy).lineTo(cx - 4, cy - 6).lineTo(cx, cy).lineTo(cx + 4, cy - 6)
-        .lineTo(cx + 10, cy)
-        .stroke({ width: 2, color: 0x000000, alpha: 0.35 });
-      break;
-    case "brute":
-      g.roundRect(cx - 8, cy - 8, 16, 16, 3).fill({ color: 0x000000, alpha: 0.2 });
-      break;
-    case "slimeSmall":
-    case "slimeMedium":
-    case "slimeBig":
-      g.ellipse(cx, cy + 2, 9, 7).fill({ color: 0xffffff, alpha: 0.15 });
-      break;
-    case "skull":
-      g.circle(cx - 4, cy - 2, 2).fill(0x331111);
-      g.circle(cx + 4, cy - 2, 2).fill(0x331111);
-      break;
-    default:
-      break;
-  }
-}
-
 function drawEnemyStatRow(
   row: Container,
   entry: EnemyStatEntry,
@@ -213,12 +192,25 @@ function drawEnemyStatRow(
   row.addChild(bg);
 
   const iconFrame = new Graphics();
-  const icon = new Graphics();
   const iconCx = 28;
   const iconCy = (ROW_H - 4) / 2;
   drawUpgradeIconFrame(iconFrame, iconCx, iconCy, ICON_BOX, entry.accent, focused);
-  drawEnemyStatIcon(icon, entry, iconCx, iconCy);
-  row.addChild(iconFrame, icon);
+
+  const { container: enemyGfx, healthBar } = createEnemyGraphic(entry.kind);
+  healthBar.visible = false;
+  const previewPhase = entry.kind === "bat" ? 0.35 : entry.kind === "ghost" ? 0.6 : 0;
+  updateEnemyAnimation(entry.kind, enemyGfx, previewPhase, 0, false, 0, 0);
+  const iconScale = scaleEnemyForStatIcon(entry.kind, ICON_BOX);
+  enemyGfx.scale.set(iconScale);
+  enemyGfx.position.set(iconCx, iconCy + 2);
+
+  const iconClip = new Graphics();
+  iconClip
+    .rect(iconCx - ICON_BOX / 2 + 3, iconCy - ICON_BOX / 2 + 3, ICON_BOX - 6, ICON_BOX - 6)
+    .fill(0xffffff);
+  enemyGfx.mask = iconClip;
+
+  row.addChild(iconClip, iconFrame, enemyGfx);
 
   const title = new Text({
     text: entry.name,
@@ -267,6 +259,98 @@ function drawEnemyStatRow(
   }
 }
 
+function drawTerrainStatIcon(g: Graphics, entry: TerrainStatEntry, cx: number, cy: number): void {
+  g.clear();
+  g.circle(cx, cy, 15).fill({ color: entry.accentColor, alpha: 0.25 });
+  switch (entry.kind) {
+    case "fissure": {
+      g.moveTo(cx - 10, cy).lineTo(cx, cy - 3).lineTo(cx + 10, cy)
+        .stroke({ width: 2.5, color: 0xffaa44, alpha: 0.9 });
+      g.circle(cx, cy, 4).fill({ color: 0xffee88, alpha: 0.8 });
+      break;
+    }
+    case "crystal": {
+      g.moveTo(cx, cy - 10).lineTo(cx + 7, cy + 2).lineTo(cx, cy + 10).lineTo(cx - 7, cy + 2)
+        .closePath()
+        .fill(0x88ccff);
+      g.moveTo(cx, cy - 6).lineTo(cx + 4, cy + 1).lineTo(cx, cy + 6).lineTo(cx - 4, cy + 1)
+        .closePath()
+        .fill(0xccffff);
+      break;
+    }
+    case "rift": {
+      g.ellipse(cx, cy, 11, 5).fill({ color: 0x220033, alpha: 0.85 });
+      g.ellipse(cx, cy, 11, 5).stroke({ width: 1.5, color: 0xdd99ff, alpha: 0.8 });
+      g.circle(cx, cy, 3).fill({ color: 0xffffff, alpha: 0.55 });
+      break;
+    }
+  }
+}
+
+function drawTerrainStatRow(
+  row: Container,
+  entry: TerrainStatEntry,
+  rowW: number,
+  focused: boolean,
+): void {
+  row.removeChildren();
+
+  const bg = new Graphics();
+  drawUpgradeCardBg(bg, rowW, ROW_H - 4, focused, entry.accentColor);
+  row.addChild(bg);
+
+  const iconFrame = new Graphics();
+  const icon = new Graphics();
+  const iconCx = 28;
+  const iconCy = (ROW_H - 4) / 2;
+  drawUpgradeIconFrame(iconFrame, iconCx, iconCy, ICON_BOX, entry.accentColor, focused);
+  drawTerrainStatIcon(icon, entry, iconCx, iconCy);
+  row.addChild(iconFrame, icon);
+
+  const title = new Text({
+    text: entry.name,
+    style: {
+      fill: UI.textPrimary,
+      fontSize: 15,
+      fontFamily: FONT,
+      fontWeight: "bold",
+      stroke: { color: 0x000000, width: focused ? 3 : 2 },
+    },
+  });
+  title.position.set(56, 6);
+
+  const tag = new Text({
+    text: entry.mapName,
+    style: {
+      fill: UI.cardSelectedGlow,
+      fontSize: 10,
+      fontFamily: FONT,
+      letterSpacing: 1,
+    },
+  });
+  tag.position.set(rowW - tag.width - 10, 8);
+
+  const desc = new Text({
+    text: entry.desc,
+    style: { fill: UI.textMuted, fontSize: 11, fontFamily: FONT },
+  });
+  desc.position.set(56, 24);
+
+  const statsLine = new Text({
+    text: entry.effect,
+    style: { fill: UI.textGreen, fontSize: 10, fontFamily: FONT },
+  });
+  statsLine.position.set(56, 38);
+
+  const extra = new Text({
+    text: entry.extra ?? `${entry.activation} · ${entry.cooldown}`,
+    style: { fill: UI.textDim, fontSize: 9, fontFamily: FONT },
+  });
+  extra.position.set(rowW - extra.width - 10, 38);
+
+  row.addChild(title, tag, desc, statsLine, extra);
+}
+
 function drawStatRow(
   row: Container,
   tab: StatTab,
@@ -284,6 +368,9 @@ function drawStatRow(
     case "enemies":
       drawEnemyStatRow(row, ENEMY_STAT_ENTRIES[index], rowW, focused);
       break;
+    case "terrain":
+      drawTerrainStatRow(row, TERRAIN_STAT_ENTRIES[index], rowW, focused);
+      break;
   }
 }
 
@@ -298,6 +385,8 @@ function tabFooter(tab: StatTab): string {
       return `${MAP_STAT_ENTRIES.length} playable arenas`;
     case "enemies":
       return `${ENEMY_STAT_ENTRIES.length} enemy types · base wave 1 stats`;
+    case "terrain":
+      return `${TERRAIN_STAT_ENTRIES.length} interactive features · Ember · Frost · Void`;
   }
 }
 
@@ -309,6 +398,8 @@ function tabSubtitle(tab: StatTab): string {
       return "Arena themes selectable in New Game";
     case "enemies":
       return "Contact damage · HP scales each wave";
+    case "terrain":
+      return "Map hazards and pickups you can trigger";
   }
 }
 
@@ -357,7 +448,7 @@ export function buildStatisticsPanel(
   c.addChild(subtitle);
 
   const tabBarY = oy + 82;
-  const tabW = 148;
+  const tabW = 118;
   const tabGap = 10;
   const totalTabW = STAT_TABS.length * tabW + (STAT_TABS.length - 1) * tabGap;
   const tabStartX = w / 2 - totalTabW / 2;
@@ -438,7 +529,7 @@ export function buildStatisticsPanel(
   c.addChild(footer);
 
   const tabHint = new Text({
-    text: "← → switch tab",
+    text: "← → switch tab · 1–4 jump to tab",
     style: { fill: UI.textDim, fontSize: 10, fontFamily: FONT },
   });
   tabHint.anchor.set(0.5);

@@ -675,7 +675,18 @@ export function computeStats(
   };
 }
 
-export function pickWeightedEnemy(wave: number): EnemyKind {
+const MAP_SPAWN_BONUSES: Partial<
+  Record<MapId, Partial<Record<EnemyKind, number>>>
+> = {
+  graveyard: {
+    skeleton: 26,
+    ghost: 6,
+    skull: 4,
+    slimeSmall: -10,
+  },
+};
+
+export function pickWeightedEnemy(wave: number, mapId: MapId = "graveyard"): EnemyKind {
   const weights = { ...ENEMY_SPAWN_WEIGHTS };
   if (wave >= 3) weights.skeleton += 4;
   if (wave >= 5) weights.skull += 3;
@@ -683,6 +694,13 @@ export function pickWeightedEnemy(wave: number): EnemyKind {
   if (wave >= 10) weights.slimeBig += 3;
   if (wave >= 14) weights.brute += 2;
   if (wave >= 18) weights.bat += 4;
+
+  const mapBonus = MAP_SPAWN_BONUSES[mapId];
+  if (mapBonus) {
+    for (const [kind, bonus] of Object.entries(mapBonus) as [EnemyKind, number][]) {
+      weights[kind] = Math.max(0, weights[kind] + bonus);
+    }
+  }
 
   let total = 0;
   for (const w of Object.values(weights)) total += w;
