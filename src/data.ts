@@ -136,6 +136,7 @@ export const CHARACTERS: CharacterDef[] = [
 export type EnemyKind =
   | "ghost"
   | "skeleton"
+  | "zombie"
   | "slimeSmall"
   | "slimeMedium"
   | "slimeBig"
@@ -160,7 +161,7 @@ export const ENEMY_DEFS: Record<EnemyKind, EnemyDef> = {
     hp: 30,
     speed: 68,
     radius: 15,
-    damage: 8,
+    damage: 12,
     xp: 6,
     gold: 1,
     tint: 0xe8e4ff,
@@ -170,17 +171,27 @@ export const ENEMY_DEFS: Record<EnemyKind, EnemyDef> = {
     hp: 42,
     speed: 72,
     radius: 14,
-    damage: 10,
+    damage: 15,
     xp: 8,
     gold: 1,
     tint: 0xf0eee0,
+  },
+  zombie: {
+    kind: "zombie",
+    hp: 48,
+    speed: 54,
+    radius: 15,
+    damage: 14,
+    xp: 8,
+    gold: 1,
+    tint: 0xa8c898,
   },
   slimeSmall: {
     kind: "slimeSmall",
     hp: 16,
     speed: 58,
     radius: 10,
-    damage: 6,
+    damage: 9,
     xp: 5,
     gold: 1,
     tint: 0xe0ffe8,
@@ -190,7 +201,7 @@ export const ENEMY_DEFS: Record<EnemyKind, EnemyDef> = {
     hp: 55,
     speed: 62,
     radius: 13,
-    damage: 12,
+    damage: 18,
     xp: 10,
     gold: 2,
     tint: 0xc8ffd8,
@@ -200,7 +211,7 @@ export const ENEMY_DEFS: Record<EnemyKind, EnemyDef> = {
     hp: 90,
     speed: 48,
     radius: 18,
-    damage: 18,
+    damage: 27,
     xp: 16,
     gold: 3,
     tint: 0xa8ffcc,
@@ -210,7 +221,7 @@ export const ENEMY_DEFS: Record<EnemyKind, EnemyDef> = {
     hp: 50,
     speed: 80,
     radius: 15,
-    damage: 12,
+    damage: 18,
     xp: 9,
     gold: 2,
     tint: 0xffe8e0,
@@ -220,7 +231,7 @@ export const ENEMY_DEFS: Record<EnemyKind, EnemyDef> = {
     hp: 28,
     speed: 95,
     radius: 14,
-    damage: 7,
+    damage: 10,
     xp: 6,
     gold: 1,
     tint: 0xe8e0ff,
@@ -230,7 +241,7 @@ export const ENEMY_DEFS: Record<EnemyKind, EnemyDef> = {
     hp: 160,
     speed: 52,
     radius: 22,
-    damage: 22,
+    damage: 33,
     xp: 28,
     gold: 5,
     tint: 0xffe8d8,
@@ -242,6 +253,7 @@ export const ENEMY_SPAWN_WEIGHTS: Record<EnemyKind, number> = {
   ghost: 18,
   bat: 16,
   skeleton: 14,
+  zombie: 0,
   slimeMedium: 10,
   skull: 8,
   slimeBig: 3,
@@ -468,6 +480,12 @@ export interface SaveData {
   unlockedShop: Record<ShopItemId, boolean>;
 }
 
+export function defaultRunShopBuffs(): Record<ShopItemId, boolean> {
+  return Object.fromEntries(
+    SHOP_ITEMS.map((s) => [s.id, false]),
+  ) as Record<ShopItemId, boolean>;
+}
+
 export function defaultSave(): SaveData {
   const shopOwned = Object.fromEntries(
     SHOP_ITEMS.map((s) => [s.id, false]),
@@ -547,6 +565,61 @@ export function getDifficulty(id: DifficultyId): DifficultyDef {
   return DIFFICULTIES.find((d) => d.id === id) ?? DIFFICULTIES[1];
 }
 
+export type MapId = "graveyard" | "ember" | "frost" | "void";
+
+export interface MapDef {
+  id: MapId;
+  name: string;
+  desc: string;
+  tileA: number;
+  tileB: number;
+  borderColor: number;
+  accentColor: number;
+}
+
+export const MAPS: MapDef[] = [
+  {
+    id: "graveyard",
+    name: "Graveyard",
+    desc: "Misty stone ruins",
+    tileA: 0x1a2230,
+    tileB: 0x151c28,
+    borderColor: 0x334455,
+    accentColor: 0x667788,
+  },
+  {
+    id: "ember",
+    name: "Ember Fields",
+    desc: "Scorched lava flats",
+    tileA: 0x2a1410,
+    tileB: 0x1e0e0a,
+    borderColor: 0x884422,
+    accentColor: 0xff6622,
+  },
+  {
+    id: "frost",
+    name: "Frost Ruins",
+    desc: "Frozen crystal wastes",
+    tileA: 0x1a2838,
+    tileB: 0x142030,
+    borderColor: 0x4488aa,
+    accentColor: 0x88ccff,
+  },
+  {
+    id: "void",
+    name: "Void Chasm",
+    desc: "Twisted shadow realm",
+    tileA: 0x18141e,
+    tileB: 0x100c14,
+    borderColor: 0x6644aa,
+    accentColor: 0xaa66ff,
+  },
+];
+
+export function getMap(id: MapId): MapDef {
+  return MAPS.find((m) => m.id === id) ?? MAPS[0];
+}
+
 export function spawnIntervalForWave(wave: number, difficulty?: DifficultyDef): number {
   const base = Math.max(0.25, 1.4 - wave * 0.035);
   return base * (difficulty?.spawnIntervalMult ?? 1);
@@ -587,34 +660,46 @@ export interface AppliedStats {
 export function computeStats(
   character: CharacterDef,
   levels: Partial<Record<UpgradeId, number>>,
-  shopActive: SaveData["shopActive"],
+  runShopBuffs: Record<ShopItemId, boolean>,
 ): AppliedStats {
   const lv = (id: UpgradeId) => levels[id] ?? 0;
   return {
     maxHp:
       character.maxHp +
       lv("vitality") * 15 +
-      (shopActive.health_potion ? 30 : 0),
+      (runShopBuffs.health_potion ? 30 : 0),
     regen: lv("recovery") * 0.4,
     armor:
-      Math.min(0.75, lv("armor") * 0.05 + (shopActive.armor_charm ? 0.1 : 0)),
+      Math.min(0.75, lv("armor") * 0.05 + (runShopBuffs.armor_charm ? 0.1 : 0)),
     speed:
       character.speed *
-      (1 + lv("haste") * 0.08 + (shopActive.speed_boots ? 0.1 : 0)),
+      (1 + lv("haste") * 0.08 + (runShopBuffs.speed_boots ? 0.1 : 0)),
     damageMult:
-      (1 + lv("might") * 0.12) * (shopActive.damage_tonic ? 1.15 : 1),
+      (1 + lv("might") * 0.12) * (runShopBuffs.damage_tonic ? 1.15 : 1),
     attackRateMult: 1 + lv("swift_strike") * 0.1,
     multishot: 1 + lv("multishot"),
     pierce: lv("pierce"),
     areaMult: 1 + lv("area") * 0.15,
     magnet: 60 + lv("magnet") * 40,
-    xpMult: (1 + lv("wisdom") * 0.12) * (shopActive.xp_scroll ? 1.2 : 1),
+    xpMult: (1 + lv("wisdom") * 0.12) * (runShopBuffs.xp_scroll ? 1.2 : 1),
     critChance: lv("crit") * 0.06,
     cooldownMult: Math.max(0.35, 1 - lv("cooldown") * 0.08),
   };
 }
 
-export function pickWeightedEnemy(wave: number): EnemyKind {
+const MAP_SPAWN_BONUSES: Partial<
+  Record<MapId, Partial<Record<EnemyKind, number>>>
+> = {
+  graveyard: {
+    skeleton: 26,
+    zombie: 24,
+    ghost: 6,
+    skull: 4,
+    slimeSmall: -10,
+  },
+};
+
+export function pickWeightedEnemy(wave: number, mapId: MapId = "graveyard"): EnemyKind {
   const weights = { ...ENEMY_SPAWN_WEIGHTS };
   if (wave >= 3) weights.skeleton += 4;
   if (wave >= 5) weights.skull += 3;
@@ -622,6 +707,14 @@ export function pickWeightedEnemy(wave: number): EnemyKind {
   if (wave >= 10) weights.slimeBig += 3;
   if (wave >= 14) weights.brute += 2;
   if (wave >= 18) weights.bat += 4;
+
+  const mapBonus = MAP_SPAWN_BONUSES[mapId];
+  if (mapBonus) {
+    for (const [kind, bonus] of Object.entries(mapBonus) as [EnemyKind, number][]) {
+      weights[kind] = Math.max(0, weights[kind] + bonus);
+    }
+  }
+  if (mapId !== "graveyard") weights.zombie = 0;
 
   let total = 0;
   for (const w of Object.values(weights)) total += w;

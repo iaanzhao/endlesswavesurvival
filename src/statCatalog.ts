@@ -1,5 +1,19 @@
-import { CHARACTERS } from "./data";
+import {
+  CHARACTERS,
+  ENEMY_DEFS,
+  ENEMY_SPAWN_WEIGHTS,
+  MAPS,
+  type EnemyKind,
+  type MapId,
+} from "./data";
 import { SKILL_COOLDOWNS } from "./bonusSkills";
+import {
+  CRYSTAL_BUFF,
+  FISSURE_BURST,
+  RIFT_CONFIG,
+  TERRAIN_INTERACT,
+  type InteractiveTerrainKind,
+} from "./mapTerrain";
 import type { StatIconId } from "./uiDraw";
 
 export interface SkillStatEntry {
@@ -166,3 +180,214 @@ export const SKILL_STAT_ENTRIES: SkillStatEntry[] = [
   ...classEntries(),
   ...bonusEntries(),
 ];
+
+export interface MapStatEntry {
+  id: MapId;
+  name: string;
+  desc: string;
+  accentColor: number;
+  terrain: string;
+  arena: string;
+  extra?: string;
+}
+
+const MAP_META: Record<MapId, { terrain: string; extra: string }> = {
+  graveyard: {
+    terrain: "Tombstones · rocks · dead trees",
+    extra: "44 obstacles · zombies rise from tombstones",
+  },
+  ember: {
+    terrain: "Lava rocks · obsidian pillars · nova fissures",
+    extra: "5 fissures · nova-burst enemies every 5s",
+  },
+  frost: {
+    terrain: "Ice pillars · snow boulders · heal crystals",
+    extra: "Crystals: +5 HP · 2× speed · +10% attack speed (3s)",
+  },
+  void: {
+    terrain: "Void monoliths · shadow rocks · blink rifts",
+    extra: "4 active rifts · both vanish on blink · respawn after 8s",
+  },
+};
+
+export const MAP_STAT_ENTRIES: MapStatEntry[] = MAPS.map((map) => ({
+  id: map.id,
+  name: map.name,
+  desc: map.desc,
+  accentColor: map.accentColor,
+  terrain: MAP_META[map.id].terrain,
+  arena: "2400 radius circle",
+  extra: MAP_META[map.id].extra,
+}));
+
+export interface EnemyStatEntry {
+  kind: EnemyKind;
+  name: string;
+  desc: string;
+  accent: number;
+  tag: string;
+  hp: string;
+  damage: string;
+  speed: string;
+  rewards: string;
+  extra?: string;
+}
+
+const ENEMY_META: Record<
+  EnemyKind,
+  { name: string; desc: string; spawnNote: string }
+> = {
+  slimeSmall: {
+    name: "Small Slime",
+    desc: "Weak swarm fodder — appears in huge numbers",
+    spawnNote: "Very common from wave 1",
+  },
+  bat: {
+    name: "Bat",
+    desc: "Fast flier that closes gaps quickly",
+    spawnNote: "Common · more bats after wave 18",
+  },
+  ghost: {
+    name: "Ghost",
+    desc: "Balanced ranged threat with steady pressure",
+    spawnNote: "Common from wave 1",
+  },
+  skeleton: {
+    name: "Skeleton",
+    desc: "Tougher bones with a bit more bite",
+    spawnNote: "Uncommon until wave 3+",
+  },
+  zombie: {
+    name: "Zombie",
+    desc: "Slow graveyard shamblers that claw their way out of tombs",
+    spawnNote: "Graveyard only · rises from tombstones",
+  },
+  slimeMedium: {
+    name: "Medium Slime",
+    desc: "Chunky blob with higher HP and damage",
+    spawnNote: "Rare early · more common wave 7+",
+  },
+  skull: {
+    name: "Skull",
+    desc: "Quick hitter that punishes slow builds",
+    spawnNote: "Uncommon until wave 5+",
+  },
+  slimeBig: {
+    name: "Big Slime",
+    desc: "Mini-tank slime with heavy contact damage",
+    spawnNote: "Very rare until wave 10+",
+  },
+  brute: {
+    name: "Brute",
+    desc: "Elite tank — slow but extremely dangerous",
+    spawnNote: "Rare elite · more likely wave 14+",
+  },
+};
+
+function spawnRarity(weight: number): string {
+  if (weight >= 20) return "Very common";
+  if (weight >= 12) return "Common";
+  if (weight >= 8) return "Uncommon";
+  if (weight >= 3) return "Rare";
+  return "Very rare";
+}
+
+const ENEMY_STAT_ORDER: EnemyKind[] = [
+  "slimeSmall",
+  "bat",
+  "ghost",
+  "skeleton",
+  "zombie",
+  "slimeMedium",
+  "skull",
+  "slimeBig",
+  "brute",
+];
+
+export const ENEMY_STAT_ENTRIES: EnemyStatEntry[] = ENEMY_STAT_ORDER.map((kind) => {
+  const def = ENEMY_DEFS[kind];
+  const meta = ENEMY_META[kind];
+  const weight = ENEMY_SPAWN_WEIGHTS[kind];
+  return {
+    kind,
+    name: meta.name,
+    desc: meta.desc,
+    accent: def.tint,
+    tag: kind === "zombie" ? "Graveyard · Common" : spawnRarity(weight),
+    hp: `${def.hp}`,
+    damage: `${def.damage}`,
+    speed: `${def.speed}`,
+    rewards: `${def.xp} XP · ${def.gold}g`,
+    extra: `${meta.spawnNote} · +HP scales with wave`,
+  };
+});
+
+export interface TerrainStatEntry {
+  kind: InteractiveTerrainKind;
+  name: string;
+  mapName: string;
+  accentColor: number;
+  desc: string;
+  activation: string;
+  cooldown: string;
+  effect: string;
+  extra?: string;
+}
+
+export const TERRAIN_STAT_ENTRIES: TerrainStatEntry[] = [
+  {
+    kind: "fissure",
+    name: "Lava Fissure",
+    mapName: "Ember Fields",
+    accentColor: 0xff6622,
+    desc: TERRAIN_INTERACT.fissure.desc,
+    activation: "Passive — always active",
+    cooldown: `${FISSURE_BURST.interval}s between bursts`,
+    effect: `${FISSURE_BURST.damage} dmg to enemies · ${FISSURE_BURST.radius} radius`,
+    extra: "Enemies only · 5 fissures per map",
+  },
+  {
+    kind: "crystal",
+    name: "Frost Crystal",
+    mapName: "Frost Ruins",
+    accentColor: 0x88ccff,
+    desc: TERRAIN_INTERACT.crystal.desc,
+    activation: `Walk within ${TERRAIN_INTERACT.crystal.triggerRadius} units`,
+    cooldown: `${TERRAIN_INTERACT.crystal.cooldown}s per crystal`,
+    effect: `+${CRYSTAL_BUFF.heal} HP · ${CRYSTAL_BUFF.speedMult}× speed · +${Math.round((CRYSTAL_BUFF.attackRateMult - 1) * 100)}% attack speed (${CRYSTAL_BUFF.duration}s)`,
+    extra: "10 crystals spread across the map",
+  },
+  {
+    kind: "rift",
+    name: "Void Rift",
+    mapName: "Void Chasm",
+    accentColor: 0xaa66ff,
+    desc: TERRAIN_INTERACT.rift.desc,
+    activation: `Walk within ${TERRAIN_INTERACT.rift.triggerRadius} units`,
+    cooldown: `${TERRAIN_INTERACT.rift.cooldown}s per rift`,
+    effect: "Blink to a random other active rift",
+    extra: `${RIFT_CONFIG.activeCount} rifts at once · both vanish · respawn after ${RIFT_CONFIG.respawnDelay}s`,
+  },
+];
+
+export type StatTab = "skills" | "maps" | "enemies" | "terrain";
+
+export const STAT_TABS: { id: StatTab; label: string }[] = [
+  { id: "skills", label: "Skills" },
+  { id: "maps", label: "Maps" },
+  { id: "enemies", label: "Enemies" },
+  { id: "terrain", label: "Terrain" },
+];
+
+export function getStatEntryCount(tab: StatTab): number {
+  switch (tab) {
+    case "skills":
+      return SKILL_STAT_ENTRIES.length;
+    case "maps":
+      return MAP_STAT_ENTRIES.length;
+    case "enemies":
+      return ENEMY_STAT_ENTRIES.length;
+    case "terrain":
+      return TERRAIN_STAT_ENTRIES.length;
+  }
+}

@@ -6,6 +6,7 @@ export type SlimeKind = "slimeSmall" | "slimeMedium" | "slimeBig";
 export type EnemyKind =
   | "ghost"
   | "skeleton"
+  | "zombie"
   | SlimeKind
   | "skull"
   | "bat"
@@ -21,6 +22,7 @@ export const SLIME_KINDS: SlimeKind[] = [
 export const ENEMY_KINDS: EnemyKind[] = [
   "ghost",
   "skeleton",
+  "zombie",
   ...SLIME_KINDS,
   "skull",
   "bat",
@@ -39,6 +41,7 @@ const ENEMY_BASE = assetUrl("assets/enemies");
 const ENEMY_HIT_RADIUS: Record<EnemyKind, number> = {
   ghost: 15,
   skeleton: 14,
+  zombie: 15,
   slimeSmall: 10,
   slimeMedium: 13,
   slimeBig: 18,
@@ -51,6 +54,7 @@ const ENEMY_HIT_RADIUS: Record<EnemyKind, number> = {
 const ENEMY_HP: Record<EnemyKind, number> = {
   ghost: 35,
   skeleton: 45,
+  zombie: 50,
   slimeSmall: 28,
   slimeMedium: 62,
   slimeBig: 68,
@@ -63,6 +67,7 @@ const ENEMY_HP: Record<EnemyKind, number> = {
 const ENEMY_HEALTH_BAR_WIDTH: Record<EnemyKind, number> = {
   ghost: 32,
   skeleton: 32,
+  zombie: 32,
   slimeSmall: 28,
   slimeMedium: 32,
   slimeBig: 40,
@@ -99,6 +104,7 @@ export async function loadEnemyAssets(): Promise<void> {
 const ENEMY_GLOW: Record<Exclude<EnemyKind, "crawlerBoss">, number> = {
   ghost: 0x8866ff,
   skeleton: 0xc8c4a8,
+  zombie: 0x55aa44,
   slimeSmall: 0x44dd88,
   slimeMedium: 0x44dd88,
   slimeBig: 0x44dd88,
@@ -110,6 +116,7 @@ const ENEMY_GLOW: Record<Exclude<EnemyKind, "crawlerBoss">, number> = {
 const ENEMY_TINT: Record<Exclude<EnemyKind, "crawlerBoss">, number> = {
   ghost: 0xe8e4ff,
   skeleton: 0xf0eee0,
+  zombie: 0xa8c898,
   slimeSmall: 0xe0ffe8,
   slimeMedium: 0xe0ffe8,
   slimeBig: 0xe0ffe8,
@@ -214,6 +221,7 @@ export type EnemyAnimBody = Container & {
 const ENEMY_WOBBLE_RATE: Record<Exclude<EnemyKind, "crawlerBoss">, number> = {
   ghost: 3.2,
   skeleton: 6.5,
+  zombie: 4.2,
   slimeSmall: 5.5,
   slimeMedium: 5,
   slimeBig: 4.2,
@@ -262,6 +270,8 @@ export function getEnemySpawnDuration(kind: EnemyKind): number {
       return 0.32;
     case "skull":
       return 0.34;
+    case "zombie":
+      return 0.58;
     default:
       return 0.34;
   }
@@ -330,6 +340,10 @@ export function getSpawnAnimation(
     case "skeleton":
       offsetY = (1 - easeOutCubic(progress)) * (radius * 1.1);
       rotation = (1 - progress) * 0.35;
+      break;
+    case "zombie":
+      offsetY = (1 - easeOutCubic(progress)) * (radius * 1.45);
+      glowBoost = (1 - progress) * 0.7;
       break;
     case "skull":
       rotation = (1 - progress) * Math.PI * 2;
@@ -460,6 +474,18 @@ export function updateEnemyAnimation(
       body.rotation = spawn.rotation + Math.sin(phase * 4.5) * 0.06 * sign;
       sprite.scale.set(base * sign, base * (1 + Math.sin(phase * 9) * 0.04));
       shadowSquash = moving ? 0.92 + Math.abs(Math.sin(phase * 9)) * 0.08 : 1;
+      break;
+    }
+    case "zombie": {
+      const lurch = Math.sin(phase * 4.5);
+      bodyY += moving ? lurch * 2.5 : Math.sin(phase * 1.6) * 1.2;
+      body.y = bodyY;
+      body.rotation = spawn.rotation + lurch * 0.07 * sign;
+      sprite.scale.set(
+        base * sign * (1 + lurch * 0.05),
+        base * (1 - Math.abs(lurch) * 0.04),
+      );
+      shadowSquash = 0.92 + Math.abs(lurch) * 0.08;
       break;
     }
     case "skull": {
@@ -842,6 +868,13 @@ export function getEnemyRadius(kind: EnemyKind): number {
   return ENEMY_HIT_RADIUS[kind];
 }
 
+/** Scale an in-game enemy graphic to fit a square HUD / UI icon slot. */
+export function scaleEnemyForStatIcon(kind: EnemyKind, boxSize: number): number {
+  const targetPx = boxSize * 0.76;
+  const approxDiameter = getEnemyRadius(kind) * 2.15 * 2;
+  return targetPx / approxDiameter;
+}
+
 export function getEnemyMaxHp(kind: EnemyKind): number {
   return ENEMY_HP[kind];
 }
@@ -940,6 +973,8 @@ export function getEnemySpeedMultiplier(kind: EnemyKind): number {
       return 1.08;
     case "skeleton":
       return 1;
+    case "zombie":
+      return 0.78;
     case "slimeSmall":
       return 0.95;
     case "slimeMedium":
