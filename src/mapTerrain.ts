@@ -386,6 +386,14 @@ export function getMapTerrain(mapId: MapId): TerrainFeature[] {
   return TERRAIN_BY_MAP[mapId];
 }
 
+export function getTombstoneGraves(
+  features: TerrainFeature[],
+): { x: number; y: number; rot: number }[] {
+  return features
+    .filter((f) => f.kind === "tombstone")
+    .map((f) => ({ x: f.x, y: f.y, rot: f.rot ?? 0 }));
+}
+
 function isBlocking(f: TerrainFeature): boolean {
   return f.blocking !== false && f.radius > 0;
 }

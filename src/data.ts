@@ -136,6 +136,7 @@ export const CHARACTERS: CharacterDef[] = [
 export type EnemyKind =
   | "ghost"
   | "skeleton"
+  | "zombie"
   | "slimeSmall"
   | "slimeMedium"
   | "slimeBig"
@@ -174,6 +175,16 @@ export const ENEMY_DEFS: Record<EnemyKind, EnemyDef> = {
     xp: 8,
     gold: 1,
     tint: 0xf0eee0,
+  },
+  zombie: {
+    kind: "zombie",
+    hp: 48,
+    speed: 54,
+    radius: 15,
+    damage: 14,
+    xp: 8,
+    gold: 1,
+    tint: 0xa8c898,
   },
   slimeSmall: {
     kind: "slimeSmall",
@@ -242,6 +253,7 @@ export const ENEMY_SPAWN_WEIGHTS: Record<EnemyKind, number> = {
   ghost: 18,
   bat: 16,
   skeleton: 14,
+  zombie: 0,
   slimeMedium: 10,
   skull: 8,
   slimeBig: 3,
@@ -680,6 +692,7 @@ const MAP_SPAWN_BONUSES: Partial<
 > = {
   graveyard: {
     skeleton: 26,
+    zombie: 24,
     ghost: 6,
     skull: 4,
     slimeSmall: -10,
@@ -701,6 +714,7 @@ export function pickWeightedEnemy(wave: number, mapId: MapId = "graveyard"): Ene
       weights[kind] = Math.max(0, weights[kind] + bonus);
     }
   }
+  if (mapId !== "graveyard") weights.zombie = 0;
 
   let total = 0;
   for (const w of Object.values(weights)) total += w;

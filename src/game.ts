@@ -75,6 +75,7 @@ import {
   findTerrainPartners,
   FISSURE_BURST,
   getMapTerrain,
+  getTombstoneGraves,
   isInteractiveTerrain,
   isRiftActive,
   relocateRift,
@@ -777,9 +778,22 @@ export async function startGame(app: Application) {
     });
   }
 
+  function pickGraveSpawn(): { x: number; y: number } | null {
+    const graves = getTombstoneGraves(terrainFeatures);
+    if (graves.length === 0) return null;
+    const grave = graves[Math.floor(Math.random() * graves.length)];
+    const outX = Math.cos(grave.rot) * 10;
+    const outY = Math.sin(grave.rot) * 10 + 16;
+    return {
+      x: grave.x + outX + (Math.random() - 0.5) * 10,
+      y: grave.y + outY + Math.random() * 6,
+    };
+  }
+
   function addEnemy(kind: EnemyKind) {
-    const pos = spawnFromEdge();
     const base = ENEMY_DEFS[kind];
+    const fromGrave = kind === "zombie" && activeMapId === "graveyard";
+    const pos = fromGrave ? pickGraveSpawn() ?? spawnFromEdge() : spawnFromEdge();
     const diff = getActiveDifficulty();
     const maxHp = Math.round((base.hp + waveEnemyHpBonus(wave, kind)) * diff.enemyHpMult);
     const { container, healthBar } = createEnemyGraphic(kind);
@@ -788,7 +802,13 @@ export async function startGame(app: Application) {
     const showHealthBar = kind === "brute";
     updateEnemyHealthBar(healthBar, maxHp, maxHp, barW, kind, showHealthBar, 0);
     enemyLayer.addChild(container);
-    spawnEnemyRing(pos.x, pos.y, base.radius, base.tint);
+    if (fromGrave) {
+      addTransientFx(spawnNovaFx(pos.x, pos.y - 6, 42, 0x665544, 0.42));
+      addTransientFx(spawnSmokeFx(pos.x, pos.y));
+      spawnEnemyRing(pos.x, pos.y, base.radius, 0x778866);
+    } else {
+      spawnEnemyRing(pos.x, pos.y, base.radius, base.tint);
+    }
 
     enemies.push({
       kind,

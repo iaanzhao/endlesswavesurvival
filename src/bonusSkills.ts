@@ -176,6 +176,6 @@ export const SKILL_COOLDOWNS: Record<
   number
 > = {
   skill_meteor: 7,
-  skill_thunder: 5,
+  skill_thunder: 2,
   skill_heal: 9,
 };

@@ -194,7 +194,7 @@ export interface MapStatEntry {
 const MAP_META: Record<MapId, { terrain: string; extra: string }> = {
   graveyard: {
     terrain: "Tombstones · rocks · dead trees",
-    extra: "44 obstacles · heavier skeleton & undead spawns",
+    extra: "44 obstacles · zombies rise from tombstones",
   },
   ember: {
     terrain: "Lava rocks · obsidian pillars · nova fissures",
@@ -257,6 +257,11 @@ const ENEMY_META: Record<
     desc: "Tougher bones with a bit more bite",
     spawnNote: "Uncommon until wave 3+",
   },
+  zombie: {
+    name: "Zombie",
+    desc: "Slow graveyard shamblers that claw their way out of tombs",
+    spawnNote: "Graveyard only · rises from tombstones",
+  },
   slimeMedium: {
     name: "Medium Slime",
     desc: "Chunky blob with higher HP and damage",
@@ -292,6 +297,7 @@ const ENEMY_STAT_ORDER: EnemyKind[] = [
   "bat",
   "ghost",
   "skeleton",
+  "zombie",
   "slimeMedium",
   "skull",
   "slimeBig",
@@ -307,7 +313,7 @@ export const ENEMY_STAT_ENTRIES: EnemyStatEntry[] = ENEMY_STAT_ORDER.map((kind) 
     name: meta.name,
     desc: meta.desc,
     accent: def.tint,
-    tag: spawnRarity(weight),
+    tag: kind === "zombie" ? "Graveyard · Common" : spawnRarity(weight),
     hp: `${def.hp}`,
     damage: `${def.damage}`,
     speed: `${def.speed}`,
