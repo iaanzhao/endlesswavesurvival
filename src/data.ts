@@ -692,10 +692,10 @@ const MAP_SPAWN_BONUSES: Partial<
 > = {
   graveyard: {
     skeleton: 26,
-    zombie: 24,
+    zombie: 48,
     ghost: 6,
     skull: 4,
-    slimeSmall: -10,
+    slimeSmall: -14,
   },
 };
 
@@ -714,7 +714,11 @@ export function pickWeightedEnemy(wave: number, mapId: MapId = "graveyard"): Ene
       weights[kind] = Math.max(0, weights[kind] + bonus);
     }
   }
-  if (mapId !== "graveyard") weights.zombie = 0;
+  if (mapId !== "graveyard") {
+    weights.zombie = 0;
+  } else if (wave >= 2) {
+    weights.zombie += Math.min(16, wave * 2);
+  }
 
   let total = 0;
   for (const w of Object.values(weights)) total += w;

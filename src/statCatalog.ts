@@ -313,7 +313,7 @@ export const ENEMY_STAT_ENTRIES: EnemyStatEntry[] = ENEMY_STAT_ORDER.map((kind) 
     name: meta.name,
     desc: meta.desc,
     accent: def.tint,
-    tag: kind === "zombie" ? "Graveyard · Common" : spawnRarity(weight),
+    tag: kind === "zombie" ? "Graveyard · Very common" : spawnRarity(weight),
     hp: `${def.hp}`,
     damage: `${def.damage}`,
     speed: `${def.speed}`,

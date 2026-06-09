@@ -199,7 +199,16 @@ function drawEnemyStatRow(
   const { container: enemyGfx, healthBar } = createEnemyGraphic(entry.kind);
   healthBar.visible = false;
   const previewPhase = entry.kind === "bat" ? 0.35 : entry.kind === "ghost" ? 0.6 : 0;
-  updateEnemyAnimation(entry.kind, enemyGfx, previewPhase, 0, false, 0, 0);
+  const previewAngle = 0;
+  updateEnemyAnimation(
+    entry.kind,
+    enemyGfx,
+    previewPhase,
+    previewAngle,
+    entry.kind === "zombie",
+    0,
+    0,
+  );
   const iconScale = scaleEnemyForStatIcon(entry.kind, ICON_BOX);
   enemyGfx.scale.set(iconScale);
   enemyGfx.position.set(iconCx, iconCy + 2);

@@ -478,11 +478,14 @@ export function updateEnemyAnimation(
     }
     case "zombie": {
       const lurch = Math.sin(phase * 4.5);
+      const cosA = Math.cos(moveAngle);
+      // Original art when player is left; mirror when player is right.
+      const facing = cosA < 0 ? 1 : cosA > 0 ? -1 : 1;
       bodyY += moving ? lurch * 2.5 : Math.sin(phase * 1.6) * 1.2;
       body.y = bodyY;
-      body.rotation = spawn.rotation + lurch * 0.07 * sign;
+      body.rotation = spawn.rotation + lurch * 0.07 * facing;
       sprite.scale.set(
-        base * sign * (1 + lurch * 0.05),
+        base * facing * (1 + lurch * 0.05),
         base * (1 - Math.abs(lurch) * 0.04),
       );
       shadowSquash = 0.92 + Math.abs(lurch) * 0.08;
