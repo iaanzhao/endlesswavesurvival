@@ -9,7 +9,7 @@ export type TerrainKind =
   | "deadTree"
   | "lavaRock"
   | "obsidian"
-  | "fissure"
+  | "volcano"
   | "icePillar"
   | "snowRock"
   | "crystal"
@@ -17,7 +17,7 @@ export type TerrainKind =
   | "voidRock"
   | "rift";
 
-export type InteractiveTerrainKind = "fissure" | "crystal" | "rift";
+export type InteractiveTerrainKind = "volcano" | "crystal" | "rift";
 
 export interface TerrainInteractDef {
   triggerRadius: number;
@@ -26,10 +26,14 @@ export interface TerrainInteractDef {
   desc: string;
 }
 
-export const FISSURE_BURST = {
-  interval: 5,
+export const VOLCANO_CONFIG = {
+  activeCount: 5,
+  eruptInterval: 5,
   radius: 120,
   damage: 32,
+  lifetime: 24,
+  respawnDelay: 8,
+  spawnMinSpacing: 260,
 };
 
 export const CRYSTAL_BUFF = {
@@ -40,11 +44,11 @@ export const CRYSTAL_BUFF = {
 };
 
 export const TERRAIN_INTERACT: Record<InteractiveTerrainKind, TerrainInteractDef> = {
-  fissure: {
+  volcano: {
     triggerRadius: 0,
     cooldown: 0,
-    label: "Nova",
-    desc: "Periodically damages nearby foes",
+    label: "Eruption",
+    desc: "Erupts to damage nearby foes · relocates over time",
   },
   crystal: {
     triggerRadius: 38,
@@ -78,10 +82,16 @@ export interface TerrainFeature {
   blocking?: boolean;
   /** Void rifts: hidden and inactive while respawning. */
   riftDormant?: boolean;
+  /** Ember volcanoes: hidden and inactive while relocating. */
+  volcanoDormant?: boolean;
 }
 
 export function isInteractiveTerrain(kind: TerrainKind): kind is InteractiveTerrainKind {
-  return kind === "fissure" || kind === "crystal" || kind === "rift";
+  return kind === "volcano" || kind === "crystal" || kind === "rift";
+}
+
+export function isVolcanoActive(f: TerrainFeature): boolean {
+  return f.kind === "volcano" && !f.volcanoDormant;
 }
 
 export function getInteractiveFeatures(features: TerrainFeature[]): number[] {
@@ -178,6 +188,76 @@ export function relocateRift(
   f.y = pos.y;
   f.rot = mulberry32(seed + 17)() * Math.PI * 2;
   f.riftDormant = false;
+  return true;
+}
+
+function collectVolcanoAvoidPoints(
+  features: TerrainFeature[],
+  skipIndex = -1,
+): { x: number; y: number; minDist: number }[] {
+  const avoid: { x: number; y: number; minDist: number }[] = [];
+  for (const f of features) {
+    if (isBlocking(f)) {
+      avoid.push({ x: f.x, y: f.y, minDist: f.radius + 100 });
+    }
+  }
+  features.forEach((f, i) => {
+    if (i === skipIndex || f.kind !== "volcano" || f.volcanoDormant) return;
+    avoid.push({ x: f.x, y: f.y, minDist: VOLCANO_CONFIG.spawnMinSpacing });
+  });
+  return avoid;
+}
+
+export function findVolcanoSpawnPosition(
+  features: TerrainFeature[],
+  seed: number,
+  skipIndex = -1,
+): { x: number; y: number } | null {
+  const rng = mulberry32(seed);
+  const avoid = collectVolcanoAvoidPoints(features, skipIndex);
+  for (let attempt = 0; attempt < 140; attempt++) {
+    const angle = rng() * Math.PI * 2;
+    const r = ARENA_INNER + rng() * (ARENA_OUTER - ARENA_INNER);
+    const x = Math.cos(angle) * r;
+    const y = Math.sin(angle) * r;
+    if (Math.hypot(x, y) < CENTER_CLEAR) continue;
+    if (avoid.some((p) => Math.hypot(p.x - x, p.y - y) < p.minDist)) continue;
+    return { x, y };
+  }
+  return null;
+}
+
+export function createEmberVolcanoFeatures(
+  features: TerrainFeature[],
+  seed: number,
+  count = VOLCANO_CONFIG.activeCount,
+): TerrainFeature[] {
+  const rng = mulberry32(seed);
+  const volcanoes: TerrainFeature[] = [];
+  const working = [...features];
+  for (let i = 0; i < count; i++) {
+    const pos = findVolcanoSpawnPosition(working, seed + i * 37);
+    if (!pos) continue;
+    const volcano = interactiveAt(pos.x, pos.y, "volcano", rng);
+    volcanoes.push(volcano);
+    working.push(volcano);
+  }
+  return volcanoes;
+}
+
+export function relocateVolcano(
+  features: TerrainFeature[],
+  index: number,
+  seed: number,
+): boolean {
+  const f = features[index];
+  if (f.kind !== "volcano") return false;
+  const pos = findVolcanoSpawnPosition(features, seed, index);
+  if (!pos) return false;
+  f.x = pos.x;
+  f.y = pos.y;
+  f.rot = mulberry32(seed + 23)() * 0.5 - 0.25;
+  f.volcanoDormant = false;
   return true;
 }
 
@@ -344,11 +424,7 @@ function buildGraveyardTerrain(): TerrainFeature[] {
 function buildEmberTerrain(): TerrainFeature[] {
   const rng = mulberry32(MAP_SEED.ember);
   const blockingPos = scatterArenaPositions(MAP_SEED.ember, 38, BLOCK_MIN_SPACING);
-  const interactPos = scatterArenaPositions(MAP_SEED.ember + 91, 5, INTERACT_MIN_SPACING);
-  return [
-    ...blockingPos.map((p) => emberBlockingAt(p.x, p.y, rng)),
-    ...interactPos.map((p) => interactiveAt(p.x, p.y, "fissure", rng)),
-  ];
+  return blockingPos.map((p) => emberBlockingAt(p.x, p.y, rng));
 }
 
 function buildFrostTerrain(): TerrainFeature[] {
@@ -368,11 +444,17 @@ function buildVoidTerrain(): TerrainFeature[] {
 }
 
 export const VOID_RIFT_SPAWN_SEED = MAP_SEED.void + 77;
+export const EMBER_VOLCANO_SPAWN_SEED = MAP_SEED.ember + 91;
 
 export function getMapTerrainForPreview(mapId: MapId): TerrainFeature[] {
   const base = TERRAIN_BY_MAP[mapId];
-  if (mapId !== "void") return base;
-  return [...base, ...createVoidRiftFeatures(base, VOID_RIFT_SPAWN_SEED)];
+  if (mapId === "void") {
+    return [...base, ...createVoidRiftFeatures(base, VOID_RIFT_SPAWN_SEED)];
+  }
+  if (mapId === "ember") {
+    return [...base, ...createEmberVolcanoFeatures(base, EMBER_VOLCANO_SPAWN_SEED)];
+  }
+  return base;
 }
 
 const TERRAIN_BY_MAP: Record<MapId, TerrainFeature[]> = {
@@ -473,57 +555,50 @@ function drawCrackBranch(
   g.moveTo(x1, y1).lineTo(mx, my).lineTo(x2, y2).stroke({ width, color, alpha });
 }
 
-function drawFissure(g: Graphics, pulse = 0, time = 0, onCooldown = false): void {
+function drawVolcano(g: Graphics, pulse = 0, time = 0, onCooldown = false): void {
   const ready = 0.35 + pulse * 0.65;
   const dim = onCooldown ? 0.38 : 1;
+  const ventY = -8;
 
-  g.ellipse(0, 4, 52, 22).fill({ color: 0x1a0804, alpha: 0.55 * dim });
-  g.ellipse(0, 2, 44, 16).fill({ color: 0x331108, alpha: 0.35 * dim });
+  g.moveTo(-38, 16).lineTo(-20, 0).lineTo(0, -40 - pulse * 5).lineTo(20, 0).lineTo(38, 16)
+    .closePath()
+    .fill({ color: 0x2a1008, alpha: 0.9 * dim });
+  g.moveTo(-30, 12).lineTo(0, -30 - pulse * 3).lineTo(30, 12)
+    .closePath()
+    .fill({ color: 0x4a2010, alpha: 0.55 * dim });
+
+  g.ellipse(0, ventY + 4, 30, 12).fill({ color: 0x1a0804, alpha: 0.65 * dim });
+  g.ellipse(0, ventY + 2, 24, 9).fill({ color: 0x331108, alpha: 0.45 * dim });
 
   const ripple = 1 + Math.sin(time * 2.4) * 0.08;
-  g.circle(0, 0, (46 + pulse * 10) * ripple).stroke({
+  g.circle(0, ventY, (40 + pulse * 10) * ripple).stroke({
     width: 2,
     color: 0xff6622,
     alpha: ready * 0.22 * dim,
   });
-  g.circle(0, 0, (34 + pulse * 6) * (1 + Math.sin(time * 3.1 + 1) * 0.06)).stroke({
+  g.circle(0, ventY, (28 + pulse * 6) * (1 + Math.sin(time * 3.1 + 1) * 0.06)).stroke({
     width: 1.5,
     color: 0xffaa44,
     alpha: ready * 0.3 * dim,
   });
 
-  const len = 96;
+  const len = 72;
   const branches: [number, number, number, number][] = [
-    [-len / 2, 0, len / 2, 0],
-    [-len / 3, -2, -len / 6, -22],
-    [len / 6, 2, len / 3, 20],
-    [-8, 0, -28, 14],
-    [10, 0, 32, -16],
-    [0, 0, 18, 24],
-    [0, 0, -16, -20],
+    [-len / 2, ventY, len / 2, ventY],
+    [-len / 4, ventY, -len / 6, ventY - 18],
+    [len / 6, ventY, len / 3, ventY + 16],
+    [0, ventY, 14, ventY + 20],
+    [0, ventY, -12, ventY - 16],
   ];
   for (const [x1, y1, x2, y2] of branches) {
-    drawCrackBranch(g, x1, y1, x2, y2, 0x2a0a04, 5, 0.45 * dim);
-    drawCrackBranch(g, x1, y1, x2, y2, 0xff4422, 2.5, (0.45 + pulse * 0.35) * dim);
+    drawCrackBranch(g, x1, y1, x2, y2, 0x2a0a04, 4, 0.4 * dim);
+    drawCrackBranch(g, x1, y1, x2, y2, 0xff4422, 2, (0.4 + pulse * 0.35) * dim);
   }
 
-  g.moveTo(-len / 2, 1)
-    .lineTo(-len / 4, -5)
-    .lineTo(0, 3)
-    .lineTo(len / 4, -4)
-    .lineTo(len / 2, 1)
-    .stroke({ width: 7, color: 0xffaa44, alpha: (0.12 + pulse * 0.22) * dim });
-  g.moveTo(-len / 2, 1)
-    .lineTo(-len / 4, -5)
-    .lineTo(0, 3)
-    .lineTo(len / 4, -4)
-    .lineTo(len / 2, 1)
-    .stroke({ width: 2.5, color: 0xffee88, alpha: (0.35 + pulse * 0.45) * dim });
-
   const coreR = 8 + pulse * 6 + Math.sin(time * 4.5) * 2;
-  g.circle(0, 0, coreR + 6).fill({ color: 0xff6622, alpha: (0.12 + pulse * 0.18) * dim });
-  g.circle(0, 0, coreR).fill({ color: 0xffaa44, alpha: (0.45 + pulse * 0.4) * dim });
-  g.circle(0, 0, coreR * 0.45).fill({ color: 0xffffcc, alpha: (0.55 + pulse * 0.35) * dim });
+  g.circle(0, ventY, coreR + 6).fill({ color: 0xff6622, alpha: (0.12 + pulse * 0.18) * dim });
+  g.circle(0, ventY, coreR).fill({ color: 0xffaa44, alpha: (0.45 + pulse * 0.4) * dim });
+  g.circle(0, ventY, coreR * 0.45).fill({ color: 0xffffcc, alpha: (0.55 + pulse * 0.35) * dim });
 
   for (let i = 0; i < 6; i++) {
     const a = time * 1.8 + (i * Math.PI * 2) / 6;
@@ -741,7 +816,7 @@ function interactPulse(
   time: number,
 ): number {
   if (cooldown > 0) return 0;
-  const speed = kind === "rift" ? 3.2 : kind === "fissure" ? 2.6 : 2;
+  const speed = kind === "rift" ? 3.2 : kind === "volcano" ? 2.6 : 2;
   return 0.5 + 0.5 * Math.sin(time * speed);
 }
 
@@ -772,8 +847,8 @@ function drawTerrainFeature(
     case "obsidian":
       drawObsidian(g, f);
       break;
-    case "fissure":
-      drawFissure(g, pulse, time, onCooldown);
+    case "volcano":
+      drawVolcano(g, pulse, time, onCooldown);
       break;
     case "icePillar":
       drawIcePillar(g, f);
@@ -825,7 +900,7 @@ export function buildMapTerrainStatic(
   }
 }
 
-/** Animated fissures / crystals / rifts — small layer, rebuilt each tick. */
+/** Animated volcanoes / crystals / rifts — small layer, rebuilt each tick. */
 export function refreshInteractiveTerrain(
   container: Container,
   map: MapDef,
@@ -837,6 +912,7 @@ export function refreshInteractiveTerrain(
   features.forEach((f, i) => {
     if (!isInteractiveTerrain(f.kind)) return;
     if (f.kind === "rift" && f.riftDormant) return;
+    if (f.kind === "volcano" && f.volcanoDormant) return;
     const piece = new Graphics();
     const cd = cooldowns[i] ?? 0;
     const pulse = interactPulse(f.kind, cd, time);
@@ -868,7 +944,7 @@ export function drawMapTerrainPreview(
 
     if (isInteractiveTerrain(f.kind)) {
       const accent =
-        f.kind === "fissure" ? 0xff6622 : f.kind === "crystal" ? 0x88ccff : 0xaa66ff;
+        f.kind === "volcano" ? 0xff6622 : f.kind === "crystal" ? 0x88ccff : 0xaa66ff;
       g.circle(px, py, 5).fill({ color: accent, alpha: 0.15 });
       g.circle(px, py, 2.5).fill({ color: accent, alpha: 0.85 });
       g.circle(px, py, 1).fill({ color: 0xffffff, alpha: 0.6 });

@@ -9,7 +9,7 @@ import {
 import { SKILL_COOLDOWNS } from "./bonusSkills";
 import {
   CRYSTAL_BUFF,
-  FISSURE_BURST,
+  VOLCANO_CONFIG,
   RIFT_CONFIG,
   TERRAIN_INTERACT,
   type InteractiveTerrainKind,
@@ -194,11 +194,11 @@ export interface MapStatEntry {
 const MAP_META: Record<MapId, { terrain: string; extra: string }> = {
   graveyard: {
     terrain: "Tombstones · rocks · dead trees",
-    extra: "44 obstacles · zombies rise from tombstones",
+    extra: "44 obstacles · zombies are the main enemy · rise from tombstones",
   },
   ember: {
-    terrain: "Lava rocks · obsidian pillars · nova fissures",
-    extra: "5 fissures · nova-burst enemies every 5s",
+    terrain: "Lava rocks · obsidian pillars · roaming volcanoes",
+    extra: "Slower spawns · brutes are common · 5 volcanoes erupt and relocate",
   },
   frost: {
     terrain: "Ice pillars · snow boulders · heal crystals",
@@ -260,7 +260,7 @@ const ENEMY_META: Record<
   zombie: {
     name: "Zombie",
     desc: "Slow graveyard shamblers that claw their way out of tombs",
-    spawnNote: "Graveyard only · rises from tombstones",
+    spawnNote: "Graveyard main enemy · rises from tombstones",
   },
   slimeMedium: {
     name: "Medium Slime",
@@ -280,7 +280,7 @@ const ENEMY_META: Record<
   brute: {
     name: "Brute",
     desc: "Elite tank — slow but extremely dangerous",
-    spawnNote: "Rare elite · more likely wave 14+",
+    spawnNote: "Rare elite · common on Ember Fields · more likely wave 14+",
   },
 };
 
@@ -313,7 +313,7 @@ export const ENEMY_STAT_ENTRIES: EnemyStatEntry[] = ENEMY_STAT_ORDER.map((kind) 
     name: meta.name,
     desc: meta.desc,
     accent: def.tint,
-    tag: kind === "zombie" ? "Graveyard · Very common" : spawnRarity(weight),
+    tag: kind === "zombie" ? "Graveyard · Main enemy" : spawnRarity(weight),
     hp: `${def.hp}`,
     damage: `${def.damage}`,
     speed: `${def.speed}`,
@@ -336,15 +336,15 @@ export interface TerrainStatEntry {
 
 export const TERRAIN_STAT_ENTRIES: TerrainStatEntry[] = [
   {
-    kind: "fissure",
-    name: "Lava Fissure",
+    kind: "volcano",
+    name: "Volcano",
     mapName: "Ember Fields",
     accentColor: 0xff6622,
-    desc: TERRAIN_INTERACT.fissure.desc,
-    activation: "Passive — always active",
-    cooldown: `${FISSURE_BURST.interval}s between bursts`,
-    effect: `${FISSURE_BURST.damage} dmg to enemies · ${FISSURE_BURST.radius} radius`,
-    extra: "Enemies only · 5 fissures per map",
+    desc: TERRAIN_INTERACT.volcano.desc,
+    activation: "Passive — always active while present",
+    cooldown: `${VOLCANO_CONFIG.eruptInterval}s between eruptions`,
+    effect: `${VOLCANO_CONFIG.damage} dmg to enemies · ${VOLCANO_CONFIG.radius} radius`,
+    extra: `${VOLCANO_CONFIG.activeCount} volcanoes · dormant after ${VOLCANO_CONFIG.lifetime}s · respawn after ${VOLCANO_CONFIG.respawnDelay}s`,
   },
   {
     kind: "crystal",

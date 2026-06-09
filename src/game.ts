@@ -62,6 +62,7 @@ import {
 } from "./uiDeath";
 import {
   buildStatisticsPanel,
+  getStatDetailScrollMax,
   getStatScrollMax,
 } from "./uiStatistics";
 import { STAT_TABS, type StatTab } from "./statCatalog";
@@ -70,19 +71,22 @@ import { buildPauseMenu } from "./uiPauseMenu";
 import { drawMapPreview } from "./uiMapPreview";
 import {
   buildMapTerrainStatic,
+  createEmberVolcanoFeatures,
   createVoidRiftFeatures,
   CRYSTAL_BUFF,
+  EMBER_VOLCANO_SPAWN_SEED,
   findTerrainPartners,
-  FISSURE_BURST,
   getMapTerrain,
   getTombstoneGraves,
   isInteractiveTerrain,
   isRiftActive,
   relocateRift,
+  relocateVolcano,
   refreshInteractiveTerrain,
   resolveTerrainCollision,
   RIFT_CONFIG,
   TERRAIN_INTERACT,
+  VOLCANO_CONFIG,
   VOID_RIFT_SPAWN_SEED,
   type TerrainFeature,
 } from "./mapTerrain";
@@ -206,7 +210,10 @@ export async function startGame(app: Application) {
   terrain.addChild(terrainStatic, terrainInteractive);
   let terrainFeatures: TerrainFeature[] = getMapTerrain("graveyard");
   let terrainCooldowns: number[] = [];
-  let terrainFissureBurstTimers: number[] = [];
+  let terrainVolcanoBurstTimers: number[] = [];
+  let volcanoLifetimeTimers: number[] = [];
+  let volcanoRespawnTimers: number[] = [];
+  let volcanoRespawnSeed = EMBER_VOLCANO_SPAWN_SEED + 200;
   let riftRespawnTimers: number[] = [];
   let riftRespawnSeed = VOID_RIFT_SPAWN_SEED + 200;
   let terrainAnimTime = 0;
@@ -226,6 +233,8 @@ export async function startGame(app: Application) {
   let menuFocus = 0;
   let statsScroll = 0;
   let statsTab: StatTab = "skills";
+  let statsDetailIndex: number | null = null;
+  let statsDetailScroll = 0;
   let deathSummaryActive = false;
   let lastDeathStats: DeathScreenStats | null = null;
   let shopFocus = 0;
@@ -438,6 +447,11 @@ export async function startGame(app: Application) {
         ...terrainFeatures,
         ...createVoidRiftFeatures(terrainFeatures, VOID_RIFT_SPAWN_SEED),
       ];
+    } else if (activeMapId === "ember") {
+      terrainFeatures = [
+        ...terrainFeatures,
+        ...createEmberVolcanoFeatures(terrainFeatures, EMBER_VOLCANO_SPAWN_SEED),
+      ];
     }
     const tile = 64;
     for (let x = -ARENA; x <= ARENA; x += tile) {
@@ -449,9 +463,18 @@ export async function startGame(app: Application) {
     floor.circle(0, 0, ARENA).stroke({ width: 6, color: map.borderColor, alpha: 0.6 });
     floor.circle(0, 0, ARENA - 4).stroke({ width: 2, color: map.accentColor, alpha: 0.25 });
     terrainCooldowns = terrainFeatures.map(() => 0);
-    terrainFissureBurstTimers = terrainFeatures.map((f, i) =>
-      f.kind === "fissure" ? FISSURE_BURST.interval * (0.25 + (i % 7) * 0.1) : 0,
+    terrainVolcanoBurstTimers = terrainFeatures.map((f, i) =>
+      f.kind === "volcano"
+        ? VOLCANO_CONFIG.eruptInterval * (0.25 + (i % 7) * 0.1)
+        : 0,
     );
+    volcanoLifetimeTimers = terrainFeatures.map((f, i) =>
+      f.kind === "volcano"
+        ? VOLCANO_CONFIG.lifetime * (0.75 + (i % 5) * 0.12)
+        : -1,
+    );
+    volcanoRespawnTimers = terrainFeatures.map((f) => (f.kind === "volcano" ? -1 : -1));
+    volcanoRespawnSeed = EMBER_VOLCANO_SPAWN_SEED + 200;
     riftRespawnTimers = terrainFeatures.map((f) => (f.kind === "rift" ? 0 : -1));
     riftRespawnSeed = VOID_RIFT_SPAWN_SEED + 200;
     terrainAnimTime = 0;
@@ -523,7 +546,7 @@ export async function startGame(app: Application) {
       const def = TERRAIN_INTERACT[f.kind];
       if (dist(playerX, playerY, f.x, f.y) > def.triggerRadius) continue;
 
-      if (f.kind === "fissure") continue;
+      if (f.kind === "volcano") continue;
       if (f.kind === "rift" && !isRiftActive(f)) continue;
 
       if (f.kind === "crystal") {
@@ -566,20 +589,50 @@ export async function startGame(app: Application) {
     }
   }
 
-  function tickFissureBursts(dt: number) {
+  function tickVolcanoes(dt: number) {
     for (let i = 0; i < terrainFeatures.length; i++) {
       const f = terrainFeatures[i];
-      if (f.kind !== "fissure") continue;
+      if (f.kind !== "volcano") continue;
 
-      terrainFissureBurstTimers[i] -= dt;
-      if (terrainFissureBurstTimers[i] > 0) continue;
+      if (f.volcanoDormant) {
+        if (volcanoRespawnTimers[i] <= 0) continue;
+        volcanoRespawnTimers[i] -= dt;
+        if (volcanoRespawnTimers[i] > 0) continue;
 
-      terrainFissureBurstTimers[i] = FISSURE_BURST.interval;
-      addTransientFx(spawnNovaFx(f.x, f.y, FISSURE_BURST.radius, 0xff6622));
+        const seed = volcanoRespawnSeed;
+        volcanoRespawnSeed += 991;
+        if (relocateVolcano(terrainFeatures, i, seed)) {
+          volcanoLifetimeTimers[i] =
+            VOLCANO_CONFIG.lifetime * (0.75 + (seed % 5) * 0.12);
+          terrainVolcanoBurstTimers[i] =
+            VOLCANO_CONFIG.eruptInterval * (0.25 + (seed % 7) * 0.1);
+          addTransientFx(spawnNovaFx(f.x, f.y, 72, 0xff6622, 0.55));
+          addTransientFx(spawnSmokeFx(f.x, f.y));
+        } else {
+          volcanoRespawnTimers[i] = 0.5;
+        }
+        continue;
+      }
+
+      volcanoLifetimeTimers[i] -= dt;
+      if (volcanoLifetimeTimers[i] <= 0) {
+        addTransientFx(spawnNovaFx(f.x, f.y, VOLCANO_CONFIG.radius, 0xff4422, 0.4));
+        addTransientFx(spawnSmokeFx(f.x, f.y));
+        f.volcanoDormant = true;
+        volcanoRespawnTimers[i] = VOLCANO_CONFIG.respawnDelay;
+        volcanoLifetimeTimers[i] = -1;
+        continue;
+      }
+
+      terrainVolcanoBurstTimers[i] -= dt;
+      if (terrainVolcanoBurstTimers[i] > 0) continue;
+
+      terrainVolcanoBurstTimers[i] = VOLCANO_CONFIG.eruptInterval;
+      addTransientFx(spawnNovaFx(f.x, f.y, VOLCANO_CONFIG.radius, 0xff6622));
       for (const e of enemies) {
         if (!isEnemyActive(e)) continue;
-        if (dist(f.x, f.y, e.x, e.y) < FISSURE_BURST.radius) {
-          damageEnemy(e, FISSURE_BURST.damage);
+        if (dist(f.x, f.y, e.x, e.y) < VOLCANO_CONFIG.radius) {
+          damageEnemy(e, VOLCANO_CONFIG.damage);
         }
       }
     }
@@ -595,7 +648,7 @@ export async function startGame(app: Application) {
         terrainCooldowns[i] = Math.max(0, terrainCooldowns[i] - dt);
       }
     }
-    tickFissureBursts(dt);
+    tickVolcanoes(dt);
     tickRiftRespawns(dt);
     tickTerrainInteractions();
     refreshTerrainVisuals();
@@ -1534,9 +1587,9 @@ export async function startGame(app: Application) {
     spawnTimer -= dt;
     if (spawnTimer <= 0) {
       const diff = getActiveDifficulty();
-      const batch = spawnBatchForWave(wave, diff);
+      const batch = spawnBatchForWave(wave, diff, activeMapId);
       for (let i = 0; i < batch; i++) addEnemy(pickWeightedEnemy(wave, activeMapId));
-      spawnTimer = spawnIntervalForWave(wave, diff);
+      spawnTimer = spawnIntervalForWave(wave, diff, activeMapId);
     }
 
     for (const e of enemies) {
@@ -1777,10 +1830,37 @@ export async function startGame(app: Application) {
     layoutOverlay();
   }
 
+  function scrollStatDetail(deltaY: number) {
+    if (statsDetailIndex === null || deltaY === 0) return;
+    const scrollMax = getStatDetailScrollMax(statsTab, statsDetailIndex);
+    if (scrollMax <= 0) return;
+    const step = Math.max(8, Math.round(Math.abs(deltaY) / 4));
+    if (deltaY > 0) {
+      statsDetailScroll = Math.min(scrollMax, statsDetailScroll + step);
+    } else {
+      statsDetailScroll = Math.max(0, statsDetailScroll - step);
+    }
+    layoutOverlay();
+  }
+
   function setStatsTab(tab: StatTab) {
     if (statsTab === tab) return;
     statsTab = tab;
     statsScroll = 0;
+    statsDetailIndex = null;
+    statsDetailScroll = 0;
+    layoutOverlay();
+  }
+
+  function openStatDetail(index: number) {
+    statsDetailIndex = index;
+    statsDetailScroll = 0;
+    layoutOverlay();
+  }
+
+  function closeStatDetail() {
+    statsDetailIndex = null;
+    statsDetailScroll = 0;
     layoutOverlay();
   }
 
@@ -1813,12 +1893,19 @@ export async function startGame(app: Application) {
           h,
           statsTab,
           statsScroll,
+          statsDetailIndex,
+          statsDetailScroll,
           () => {
             phase = "mainMenu";
+            statsDetailIndex = null;
+            statsDetailScroll = 0;
             layoutOverlay();
           },
           scrollStatistics,
+          scrollStatDetail,
           setStatsTab,
+          openStatDetail,
+          closeStatDetail,
         ),
       );
     } else if (phase === "help") {
@@ -1946,6 +2033,8 @@ export async function startGame(app: Application) {
       () => {
         statsScroll = 0;
         statsTab = "skills";
+        statsDetailIndex = null;
+        statsDetailScroll = 0;
         phase = "statistics";
         layoutOverlay();
       },
@@ -2358,30 +2447,45 @@ export async function startGame(app: Application) {
         } else if (menuFocus === 2) {
           statsScroll = 0;
           statsTab = "skills";
+          statsDetailIndex = null;
+          statsDetailScroll = 0;
           phase = "statistics";
         } else phase = "help";
         layoutOverlay();
       }
     } else if (phase === "statistics") {
-      if (input.pressed("ArrowLeft") || input.pressed("KeyA")) {
-        cycleStatsTab(-1);
-      }
-      if (input.pressed("ArrowRight") || input.pressed("KeyD")) {
-        cycleStatsTab(1);
-      }
-      if (input.pressed("Digit1")) setStatsTab("skills");
-      if (input.pressed("Digit2")) setStatsTab("maps");
-      if (input.pressed("Digit3")) setStatsTab("enemies");
-      if (input.pressed("Digit4")) setStatsTab("terrain");
-      if (input.pressed("ArrowUp") || input.pressed("KeyW")) {
-        scrollStatistics(-50);
-      }
-      if (input.pressed("ArrowDown") || input.pressed("KeyS")) {
-        scrollStatistics(50);
-      }
-      if (input.pressed("Escape")) {
-        phase = "mainMenu";
-        layoutOverlay();
+      if (statsDetailIndex !== null) {
+        if (input.pressed("ArrowUp") || input.pressed("KeyW")) {
+          scrollStatDetail(-50);
+        }
+        if (input.pressed("ArrowDown") || input.pressed("KeyS")) {
+          scrollStatDetail(50);
+        }
+        if (input.pressed("Escape") || input.pressed("Enter") || input.pressed("Space")) {
+          closeStatDetail();
+        }
+      } else {
+        if (input.pressed("ArrowLeft") || input.pressed("KeyA")) {
+          cycleStatsTab(-1);
+        }
+        if (input.pressed("ArrowRight") || input.pressed("KeyD")) {
+          cycleStatsTab(1);
+        }
+        if (input.pressed("Digit1")) setStatsTab("skills");
+        if (input.pressed("Digit2")) setStatsTab("maps");
+        if (input.pressed("Digit3")) setStatsTab("enemies");
+        if (input.pressed("Digit4")) setStatsTab("terrain");
+        if (input.pressed("ArrowUp") || input.pressed("KeyW")) {
+          scrollStatistics(-50);
+        }
+        if (input.pressed("ArrowDown") || input.pressed("KeyS")) {
+          scrollStatistics(50);
+        }
+        if (input.pressed("Escape")) {
+          phase = "mainMenu";
+          statsDetailIndex = null;
+          layoutOverlay();
+        }
       }
     } else if (phase === "characterSelect") {
       if (charSelectSection === "hero") {

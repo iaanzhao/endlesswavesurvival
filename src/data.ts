@@ -620,14 +620,53 @@ export function getMap(id: MapId): MapDef {
   return MAPS.find((m) => m.id === id) ?? MAPS[0];
 }
 
-export function spawnIntervalForWave(wave: number, difficulty?: DifficultyDef): number {
+const MAP_SPAWN_RATE: Partial<
+  Record<MapId, { intervalMult: number; batchMult: number }>
+> = {
+  ember: { intervalMult: 1.38, batchMult: 0.72 },
+};
+
+const MAP_SPAWN_BONUSES: Partial<
+  Record<MapId, Partial<Record<EnemyKind, number>>>
+> = {
+  graveyard: {
+    zombie: 220,
+    skeleton: 10,
+    ghost: 4,
+    skull: 6,
+    slimeSmall: -24,
+    bat: -12,
+    slimeMedium: -6,
+  },
+  ember: {
+    brute: 18,
+    slimeSmall: -14,
+    ghost: -8,
+    bat: -6,
+    skeleton: -6,
+    slimeMedium: -4,
+    skull: -2,
+  },
+};
+
+export function spawnIntervalForWave(
+  wave: number,
+  difficulty?: DifficultyDef,
+  mapId?: MapId,
+): number {
   const base = Math.max(0.25, 1.4 - wave * 0.035);
-  return base * (difficulty?.spawnIntervalMult ?? 1);
+  const mapMult = mapId ? (MAP_SPAWN_RATE[mapId]?.intervalMult ?? 1) : 1;
+  return base * (difficulty?.spawnIntervalMult ?? 1) * mapMult;
 }
 
-export function spawnBatchForWave(wave: number, difficulty?: DifficultyDef): number {
+export function spawnBatchForWave(
+  wave: number,
+  difficulty?: DifficultyDef,
+  mapId?: MapId,
+): number {
   const base = 1 + Math.floor(wave / 6);
-  return Math.max(1, Math.round(base * (difficulty?.spawnBatchMult ?? 1)));
+  const mapMult = mapId ? (MAP_SPAWN_RATE[mapId]?.batchMult ?? 1) : 1;
+  return Math.max(1, Math.round(base * (difficulty?.spawnBatchMult ?? 1) * mapMult));
 }
 
 export function waveEnemyHpBonus(wave: number, kind: EnemyKind): number {
@@ -687,18 +726,6 @@ export function computeStats(
   };
 }
 
-const MAP_SPAWN_BONUSES: Partial<
-  Record<MapId, Partial<Record<EnemyKind, number>>>
-> = {
-  graveyard: {
-    skeleton: 26,
-    zombie: 48,
-    ghost: 6,
-    skull: 4,
-    slimeSmall: -14,
-  },
-};
-
 export function pickWeightedEnemy(wave: number, mapId: MapId = "graveyard"): EnemyKind {
   const weights = { ...ENEMY_SPAWN_WEIGHTS };
   if (wave >= 3) weights.skeleton += 4;
@@ -717,7 +744,10 @@ export function pickWeightedEnemy(wave: number, mapId: MapId = "graveyard"): Ene
   if (mapId !== "graveyard") {
     weights.zombie = 0;
   } else if (wave >= 2) {
-    weights.zombie += Math.min(16, wave * 2);
+    weights.zombie += Math.min(48, wave * 6);
+  }
+  if (mapId === "ember" && wave >= 6) {
+    weights.brute += Math.min(14, wave);
   }
 
   let total = 0;

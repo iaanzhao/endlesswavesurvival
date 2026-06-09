@@ -61,12 +61,13 @@ export function drawMinimap(
 
   for (const f of data.terrain) {
     if (f.kind === "rift" && f.riftDormant) continue;
+    if (f.kind === "volcano" && f.volcanoDormant) continue;
     const p = toMap(f.x, f.y);
     if (!inside(p.x, p.y)) continue;
 
     if (isInteractiveTerrain(f.kind)) {
       const color =
-        f.kind === "fissure" ? 0xff6622 : f.kind === "crystal" ? 0x88ccff : 0xaa66ff;
+        f.kind === "volcano" ? 0xff6622 : f.kind === "crystal" ? 0x88ccff : 0xaa66ff;
       g.circle(p.x, p.y, 2.4).fill({ color, alpha: 0.95 });
       g.circle(p.x, p.y, 3.5).stroke({ width: 0.5, color, alpha: 0.35 });
       continue;
